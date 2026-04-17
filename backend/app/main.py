@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .api.routes import jobs, upload
+from .api.routes import artifacts, jobs, upload
 
 app = FastAPI(
     title="Helium",
@@ -21,6 +21,7 @@ app.add_middleware(
 
 app.include_router(upload.router)
 app.include_router(jobs.router)
+app.include_router(artifacts.router)
 
 
 @app.get("/health", tags=["meta"])

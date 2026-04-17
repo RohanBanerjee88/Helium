@@ -26,13 +26,15 @@ class StageResult(BaseModel):
     message: str = ""
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
+    artifacts: List[str] = Field(default_factory=list)
 
 
 class JobArtifacts(BaseModel):
-    features_dir: Optional[str] = None
-    matches_dir: Optional[str] = None
-    point_cloud_dir: Optional[str] = None
-    mesh_dir: Optional[str] = None
+    sparse_ply: Optional[str] = None
+    cameras_json: Optional[str] = None
+    dense_ply: Optional[str] = None
+    mesh_obj: Optional[str] = None
+    mesh_stl: Optional[str] = None
 
 
 PIPELINE_STAGES = ["validate", "features", "matching", "sfm", "dense", "export"]
@@ -50,3 +52,4 @@ class Job(BaseModel):
     )
     error: Optional[str] = None
     artifacts: JobArtifacts = Field(default_factory=JobArtifacts)
+    real_reconstruction: bool = False
