@@ -30,7 +30,7 @@ resource "aws_security_group" "ecs_tasks" {
   vpc_id      = aws_vpc.main.id
 
   egress {
-    description = "HTTPS outbound — ECR image pulls, CloudWatch Logs, external APIs"
+    description = "HTTPS outbound for ECR image pulls, CloudWatch Logs, external APIs"
     from_port   = 443
     to_port     = 443
     protocol    = "tcp"
