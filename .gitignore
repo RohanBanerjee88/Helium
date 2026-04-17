@@ -25,3 +25,6 @@ data/jobs/
 # OS
 .DS_Store
 Thumbs.db
+
+# Claude context
+CLAUDE.md
