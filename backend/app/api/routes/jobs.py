@@ -7,7 +7,7 @@ from ...services import job_service
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
-
+print("Loading jobs routes...")
 @router.get("/", response_model=List[Job])
 def list_jobs() -> List[Job]:
     """Return all jobs, newest first."""
