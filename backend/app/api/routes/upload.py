@@ -27,8 +27,10 @@ async def upload_images(
     try:
         saved = upload_service.save_images(job, files)
     except HTTPException:
+        storage.delete_job(job.id)
         raise
     except Exception as exc:
+        storage.delete_job(job.id)
         raise HTTPException(status_code=500, detail=f"Failed to save images: {exc}") from exc
 
     job.image_count = len(saved)
