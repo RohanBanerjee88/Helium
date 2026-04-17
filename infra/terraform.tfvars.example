@@ -1,0 +1,21 @@
+project_name       = "helium"
+environment        = "prod"
+aws_region         = "us-east-1"
+availability_zones = ["us-east-1a", "us-east-1b"]
+
+# Fargate sizing — 1 vCPU / 2 GB is enough for the FastAPI + Open3D workload
+task_cpu    = 1024
+task_memory = 2048
+
+desired_count = 1
+
+# ACM cert ARN for HTTPS — leave empty to start with HTTP only
+# certificate_arn = "arn:aws:acm:us-east-1:123456789012:certificate/..."
+
+log_retention_days = 30
+
+# Helium app config
+helium_data_dir          = "/tmp/data"
+helium_min_images        = 8
+helium_max_images        = 20
+helium_max_image_size_mb = 20
