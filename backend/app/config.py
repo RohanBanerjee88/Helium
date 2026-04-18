@@ -3,6 +3,7 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     data_dir: str = "./data"
+    database_url: str = "cockroachdb+asyncpg://root@localhost:26257/helium"
 
     min_images: int = 8
     max_images: int = 20

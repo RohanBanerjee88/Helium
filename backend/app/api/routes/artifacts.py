@@ -1,27 +1,37 @@
 from pathlib import Path
 from typing import Any, Dict, List
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from ...db import JobRepository, get_db
 from ...services import job_service
 from ...storage.local import storage
 
 router = APIRouter(prefix="/jobs", tags=["artifacts"])
 
 
+def get_repo(db: AsyncSession = Depends(get_db)) -> JobRepository:
+    return JobRepository(db)
+
+
 @router.get("/{job_id}/artifacts", response_model=List[Dict[str, Any]])
-def list_artifacts(job_id: str) -> List[Dict[str, Any]]:
+async def list_artifacts(
+    job_id: str, repo: JobRepository = Depends(get_repo)
+) -> List[Dict[str, Any]]:
     """List all artifact files produced for a job."""
-    if job_service.get_job(job_id) is None:
+    if await job_service.get_job(job_id, repo) is None:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
     return storage.list_artifacts(job_id)
 
 
 @router.get("/{job_id}/artifacts/{file_path:path}")
-def download_artifact(job_id: str, file_path: str) -> FileResponse:
+async def download_artifact(
+    job_id: str, file_path: str, repo: JobRepository = Depends(get_repo)
+) -> FileResponse:
     """Download a specific artifact (e.g. point_cloud/sparse.ply)."""
-    if job_service.get_job(job_id) is None:
+    if await job_service.get_job(job_id, repo) is None:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
 
     artifacts_dir = storage.artifacts_dir(job_id)
@@ -38,9 +48,11 @@ def download_artifact(job_id: str, file_path: str) -> FileResponse:
 
 
 @router.get("/{job_id}/summary")
-def job_summary(job_id: str) -> Dict[str, Any]:
+async def job_summary(
+    job_id: str, repo: JobRepository = Depends(get_repo)
+) -> Dict[str, Any]:
     """Compact reconstruction summary: status, real_reconstruction flag, per-stage artifacts."""
-    job = job_service.get_job(job_id)
+    job = await job_service.get_job(job_id, repo)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
 

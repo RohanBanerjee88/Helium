@@ -6,9 +6,7 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      # Persist job data outside the container
       - ./data:/app/data
-      # Hot-reload: mount source for development
       - ./backend:/app
     env_file:
       - .env
