@@ -6,6 +6,7 @@ pydantic-settings>=2.2.0
 opencv-python-headless>=4.9.0
 numpy>=1.26.0
 open3d>=0.18.0
+pycolmap>=0.6.0
 trimesh>=4.3.0
 httpx>=0.27.0
 pytest>=8.1.0

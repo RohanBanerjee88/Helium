@@ -1,7 +1,9 @@
-import json
+import os
+import shutil
+import tempfile
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from ..config import settings
 from ..models.job import Job
@@ -15,8 +17,8 @@ class LocalStorage:
         artifacts/
           features/       keypoints + descriptors per image
           matches/        pairwise match files
-          point_cloud/    sparse + dense PLY files (future)
-          mesh/           OBJ / STL exports (future)
+          point_cloud/    sparse + dense PLY files
+          mesh/           OBJ / STL exports
         metadata.json     job state
     """
 
@@ -46,12 +48,23 @@ class LocalStorage:
             (artifacts / subdir).mkdir(parents=True, exist_ok=True)
         self.images_dir(job_id).mkdir(parents=True, exist_ok=True)
 
+    def delete_job(self, job_id: str) -> None:
+        job_dir = self.job_dir(job_id)
+        if job_dir.exists():
+            shutil.rmtree(job_dir)
+
     # --- Persistence ---
 
     def save_job(self, job: Job) -> None:
         job.updated_at = datetime.utcnow()
-        with open(self.metadata_path(job.id), "w") as fh:
-            fh.write(job.model_dump_json(indent=2))
+        path = self.metadata_path(job.id)
+        # Atomic write: write to temp file then rename to avoid partial reads
+        with tempfile.NamedTemporaryFile(
+            mode="w", dir=str(path.parent), delete=False, suffix=".tmp"
+        ) as tmp:
+            tmp.write(job.model_dump_json(indent=2))
+            tmp_path = tmp.name
+        os.replace(tmp_path, path)
 
     def load_job(self, job_id: str) -> Optional[Job]:
         path = self.metadata_path(job_id)
@@ -62,6 +75,23 @@ class LocalStorage:
 
     def list_job_ids(self) -> List[str]:
         return [d.name for d in self._jobs_root.iterdir() if d.is_dir()]
+
+    def list_artifacts(self, job_id: str) -> List[Dict[str, Any]]:
+        artifacts_dir = self.artifacts_dir(job_id)
+        if not artifacts_dir.exists():
+            return []
+        result = []
+        for path in sorted(artifacts_dir.rglob("*")):
+            if path.is_file():
+                rel = path.relative_to(artifacts_dir)
+                result.append(
+                    {
+                        "name": path.name,
+                        "path": str(rel),
+                        "size_bytes": path.stat().st_size,
+                    }
+                )
+        return result
 
 
 storage = LocalStorage()
