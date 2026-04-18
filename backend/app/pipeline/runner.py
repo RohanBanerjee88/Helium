@@ -1,15 +1,16 @@
 """
 Pipeline runner.
 
-Executes the six reconstruction stages sequentially in a background thread.
-Each stage updates its own status in the job metadata file so callers can
-poll /jobs/{id} for real-time progress.
+Executes reconstruction stages sequentially in a background thread.
+Each stage updates its own status in metadata so callers can poll /jobs/{id}.
 
 Stage execution order:
   validate → features → matching → sfm → dense → export
 
-Any unhandled exception inside a stage marks that stage and the whole job as
-FAILED and records the error message. Subsequent stages are skipped.
+Stages that return {"status": "placeholder"} are marked SKIPPED rather than
+COMPLETED — the job is never falsely reported as a real reconstruction when
+sfm hasn't run. The job is only marked real_reconstruction=True when sfm
+produces expected artifacts (sparse.ply + cameras.json).
 """
 
 import threading
@@ -20,6 +21,8 @@ from typing import Any, Callable, Dict, Optional
 from ..models.job import Job, JobStatus, StageStatus
 from ..pipeline.stages import dense, export, features, matching, sfm, validate
 from ..storage.local import storage
+
+_PLACEHOLDER_STATUS = "placeholder"
 
 
 def _run_stage(
@@ -36,8 +39,16 @@ def _run_stage(
 
     try:
         result = fn(*args, **kwargs)
-        stage.status = StageStatus.COMPLETED
-        stage.message = str(result)
+
+        if isinstance(result, dict) and result.get("status") == _PLACEHOLDER_STATUS:
+            stage.status = StageStatus.SKIPPED
+            stage.message = result.get("note", "Not yet implemented.")
+        else:
+            stage.status = StageStatus.COMPLETED
+            stage.message = str(result)
+            if isinstance(result, dict) and "artifacts" in result:
+                stage.artifacts = list(result["artifacts"])
+
         stage.completed_at = datetime.utcnow()
         storage.save_job(job)
         return result
@@ -51,10 +62,9 @@ def _run_stage(
         raise
 
 
-def _skip_remaining(job: Job, from_stage: str) -> None:
+def _skip_remaining(job: Job, from_index: int) -> None:
     stages = list(job.stages.keys())
-    start = stages.index(from_stage) if from_stage in stages else len(stages)
-    for name in stages[start:]:
+    for name in stages[from_index:]:
         if job.stages[name].status == StageStatus.PENDING:
             job.stages[name].status = StageStatus.SKIPPED
     storage.save_job(job)
@@ -79,19 +89,31 @@ def run_pipeline(job_id: str) -> None:
         _run_stage(job, "dense", dense.run, artifacts_dir, job.images)
         _run_stage(job, "export", export.run, artifacts_dir)
 
+        # Only flag real_reconstruction when sfm produced actual artifact files
+        sfm_stage = job.stages["sfm"]
+        if sfm_stage.status == StageStatus.COMPLETED and sfm_stage.artifacts:
+            job.real_reconstruction = True
+            for rel in sfm_stage.artifacts:
+                name = Path(rel).name
+                if name == "sparse.ply":
+                    job.artifacts.sparse_ply = rel
+                elif name == "cameras.json":
+                    job.artifacts.cameras_json = rel
+
         job.status = JobStatus.COMPLETED
         storage.save_job(job)
 
     except Exception:
-        # Find the first failed stage and skip everything after it
-        failed = next(
-            (name for name, s in job.stages.items() if s.status == StageStatus.FAILED),
+        failed_index = next(
+            (
+                i
+                for i, (name, s) in enumerate(job.stages.items())
+                if s.status == StageStatus.FAILED
+            ),
             None,
         )
-        if failed:
-            next_stages = list(job.stages.keys())
-            idx = next_stages.index(failed) + 1
-            _skip_remaining(job, next_stages[idx] if idx < len(next_stages) else "")
+        if failed_index is not None:
+            _skip_remaining(job, failed_index + 1)
 
 
 def start_pipeline_async(job_id: str) -> None:
