@@ -76,7 +76,13 @@ resource "aws_ecs_service" "backend" {
   cluster         = aws_ecs_cluster.main.arn
   task_definition = aws_ecs_task_definition.backend.arn
   desired_count   = var.desired_count
-  launch_type     = "FARGATE"
+
+  # FARGATE_SPOT saves ~70% vs on-demand. ECS replaces interrupted tasks
+  # automatically. Switch weight to FARGATE=1/FARGATE_SPOT=0 for production.
+  capacity_provider_strategy {
+    capacity_provider = "FARGATE_SPOT"
+    weight            = 1
+  }
 
   # Allow the ALB health checks to warm up before ECS counts failures
   health_check_grace_period_seconds = 60
@@ -84,10 +90,13 @@ resource "aws_ecs_service" "backend" {
   # Trigger a new deployment whenever the task definition changes in Terraform
   force_new_deployment = true
 
+  # Tasks run in public subnets and pull ECR images directly over the internet.
+  # Security groups still restrict all inbound to the ALB only.
+  # Move to private subnets and set assign_public_ip = false when adding a NAT Gateway.
   network_configuration {
-    subnets          = aws_subnet.private[*].id
+    subnets          = aws_subnet.public[*].id
     security_groups  = [aws_security_group.ecs_tasks.id]
-    assign_public_ip = false
+    assign_public_ip = true
   }
 
   load_balancer {

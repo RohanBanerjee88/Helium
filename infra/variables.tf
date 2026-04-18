@@ -37,13 +37,13 @@ variable "container_port" {
 variable "task_cpu" {
   description = "Fargate task CPU units (256 | 512 | 1024 | 2048 | 4096)"
   type        = number
-  default     = 1024
+  default     = 512
 }
 
 variable "task_memory" {
   description = "Fargate task memory in MiB"
   type        = number
-  default     = 2048
+  default     = 1024
 }
 
 variable "desired_count" {

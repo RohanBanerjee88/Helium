@@ -3,9 +3,10 @@ environment        = "prod"
 aws_region         = "us-east-1"
 availability_zones = ["us-east-1a", "us-east-1b"]
 
-# Fargate sizing — 1 vCPU / 2 GB is enough for the FastAPI + Open3D workload
-task_cpu    = 1024
-task_memory = 2048
+# Fargate sizing — 0.5 vCPU / 1 GB for the FastAPI backend (scale up if Open3D
+# reconstruction jobs run inside the task rather than as async workers)
+task_cpu    = 512
+task_memory = 1024
 
 desired_count = 1
 
