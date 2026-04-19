@@ -26,13 +26,13 @@ terraform {
   #
   # Then uncomment the block below and re-run `terraform init`.
 
-  # backend "s3" {
-  #   bucket         = "helium-terraform-state"
-  #   key            = "prod/terraform.tfstate"
-  #   region         = "us-east-1"
-  #   dynamodb_table = "helium-terraform-locks"
-  #   encrypt        = true
-  # }
+  backend "s3" {
+    bucket       = "helium-terraform-state-554748422019"
+    key          = "prod/terraform.tfstate"
+    region       = "us-east-1"
+    use_lockfile = true
+    encrypt      = true
+  }
 }
 
 provider "aws" {
