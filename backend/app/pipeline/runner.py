@@ -15,7 +15,7 @@ produces expected artifacts (sparse.ply + cameras.json).
 
 import asyncio
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
@@ -76,7 +76,7 @@ def _run_stage(
 ) -> Dict[str, Any]:
     stage = job.stages[stage_name]
     stage.status = StageStatus.RUNNING
-    stage.started_at = datetime.utcnow()
+    stage.started_at = datetime.now(timezone.utc)
     _save_job(job)
 
     try:
@@ -91,13 +91,13 @@ def _run_stage(
             if isinstance(result, dict) and "artifacts" in result:
                 stage.artifacts = list(result["artifacts"])
 
-        stage.completed_at = datetime.utcnow()
+        stage.completed_at = datetime.now(timezone.utc)
         _save_job(job)
         return result
     except Exception as exc:
         stage.status = StageStatus.FAILED
         stage.message = str(exc)
-        stage.completed_at = datetime.utcnow()
+        stage.completed_at = datetime.now(timezone.utc)
         job.status = JobStatus.FAILED
         job.error = f"Stage '{stage_name}' failed: {exc}"
         _save_job(job)
