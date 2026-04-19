@@ -105,7 +105,7 @@ resource "aws_iam_role_policy" "ci_deploy" {
           "ecs:UpdateService",
         ]
         Resource = [
-          "arn:aws:ecs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:task-definition/${var.project_name}-${var.environment}-backend",
+          "arn:aws:ecs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:task-definition/${var.project_name}-${var.environment}-backend:*",
           "arn:aws:ecs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:service/${var.project_name}-${var.environment}/${var.project_name}-${var.environment}-backend",
         ]
       },
