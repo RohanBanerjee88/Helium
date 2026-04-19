@@ -1,7 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Integer, String, Text, func
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import Boolean, DateTime, Integer, JSON, String, Text, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -17,8 +16,8 @@ class JobRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     image_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    images: Mapped[dict] = mapped_column(JSONB, nullable=False, default=list)
-    stages: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    images: Mapped[dict] = mapped_column(JSON, nullable=False, default=list)
+    stages: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
-    artifacts: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    artifacts: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     real_reconstruction: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

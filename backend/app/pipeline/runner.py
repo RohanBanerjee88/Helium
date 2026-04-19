@@ -31,9 +31,11 @@ _PLACEHOLDER_STATUS = "placeholder"
 
 
 def _make_engine():
-    return create_async_engine(
-        settings.database_url, connect_args={"ssl": True}, pool_size=1, max_overflow=0
-    )
+    url = settings.database_url
+    if url.startswith("sqlite"):
+        from sqlalchemy.pool import StaticPool
+        return create_async_engine(url, connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    return create_async_engine(url, connect_args={"ssl": True}, pool_size=1, max_overflow=0)
 
 
 async def _db_save(job: Job) -> None:
