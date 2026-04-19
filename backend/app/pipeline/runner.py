@@ -19,7 +19,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
-from ..db.engine import async_session_factory
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+from ..config import settings
 from ..db.repository import JobRepository
 from ..models.job import Job, JobStatus, StageStatus
 from ..pipeline.stages import dense, export, features, matching, sfm, validate
@@ -28,15 +30,31 @@ from ..storage.local import storage
 _PLACEHOLDER_STATUS = "placeholder"
 
 
+def _make_engine():
+    return create_async_engine(
+        settings.database_url, connect_args={"ssl": True}, pool_size=1, max_overflow=0
+    )
+
+
 async def _db_save(job: Job) -> None:
-    async with async_session_factory() as session:
-        await JobRepository(session).save(job)
-        await session.commit()
+    engine = _make_engine()
+    try:
+        session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        async with session_factory() as session:
+            await JobRepository(session).save(job)
+            await session.commit()
+    finally:
+        await engine.dispose()
 
 
 async def _db_load(job_id: str) -> Optional[Job]:
-    async with async_session_factory() as session:
-        return await JobRepository(session).get(job_id)
+    engine = _make_engine()
+    try:
+        session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        async with session_factory() as session:
+            return await JobRepository(session).get(job_id)
+    finally:
+        await engine.dispose()
 
 
 def _save_job(job: Job) -> None:
