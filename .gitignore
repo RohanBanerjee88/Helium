@@ -11,8 +11,8 @@ build/
 # Environment
 .env
 
-# Job data (large binary files + generated artifacts)
-data/jobs/
+# Local server data directory (jobs, shell history, artifacts)
+data/
 
 # IDE
 .vscode/

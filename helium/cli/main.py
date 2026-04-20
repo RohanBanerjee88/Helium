@@ -397,6 +397,24 @@ def run(
 
 
 # ---------------------------------------------------------------------------
+# helium shell  (+ helium explode as a hidden alias)
+# ---------------------------------------------------------------------------
+
+@app.command("shell")
+def shell_cmd() -> None:
+    """Start an interactive Helium session with tab completion and history."""
+    from helium.cli.shell import run_shell
+    run_shell()
+
+
+@app.command("explode", hidden=True)
+def explode_cmd() -> None:
+    """Start an interactive Helium session. (alias for 'shell')"""
+    from helium.cli.shell import run_shell
+    run_shell()
+
+
+# ---------------------------------------------------------------------------
 # helium config
 # ---------------------------------------------------------------------------
 
