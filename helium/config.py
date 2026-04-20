@@ -15,7 +15,9 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8000
 
-    model_config = {"env_prefix": "HELIUM_", "env_file": ".env"}
+    model_config = {"env_prefix": "HELIUM_", "env_file": ".env", "extra": "ignore"}
 
 
 settings = Settings()
+if not Path(settings.data_dir).is_absolute():
+    settings.data_dir = str((Path.cwd() / settings.data_dir).resolve())

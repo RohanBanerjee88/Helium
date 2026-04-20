@@ -23,7 +23,7 @@ class LocalStorage:
     """
 
     def __init__(self) -> None:
-        self._jobs_root = Path(settings.data_dir) / "jobs"
+        self._jobs_root = Path(settings.data_dir).resolve() / "jobs"
         self._jobs_root.mkdir(parents=True, exist_ok=True)
 
     # --- Path helpers ---
@@ -74,6 +74,7 @@ class LocalStorage:
             return Job.model_validate_json(fh.read())
 
     def list_job_ids(self) -> List[str]:
+        self._jobs_root.mkdir(parents=True, exist_ok=True)
         return [d.name for d in self._jobs_root.iterdir() if d.is_dir()]
 
     def list_artifacts(self, job_id: str) -> List[Dict[str, Any]]:

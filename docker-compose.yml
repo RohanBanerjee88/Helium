@@ -1,13 +1,12 @@
-version: "3.9"
-
 services:
   api:
-    build: ./backend
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
     ports:
       - "8000:8000"
     volumes:
-      - ./data:/app/data
-      - ./backend:/app
+      - ./:/app
     env_file:
       - .env
     restart: unless-stopped
