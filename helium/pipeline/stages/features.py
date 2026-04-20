@@ -21,7 +21,12 @@ import numpy as np
 _SIFT_MAX_FEATURES = 2000
 
 
-def run(images_dir: Path, artifacts_dir: Path, image_files: List[str]) -> Dict[str, Any]:
+def run(
+    images_dir: Path,
+    artifacts_dir: Path,
+    image_files: List[str],
+    progress_callback=None,
+) -> Dict[str, Any]:
     features_dir = artifacts_dir / "features"
     features_dir.mkdir(parents=True, exist_ok=True)
 
@@ -55,5 +60,7 @@ def run(images_dir: Path, artifacts_dir: Path, image_files: List[str]) -> Dict[s
             np.save(str(features_dir / f"{stem}_descriptors.npy"), descriptors)
 
         results.append({"filename": filename, "keypoints": len(keypoints)})
+        if progress_callback is not None:
+            progress_callback(filename, len(keypoints))
 
     return {"processed": len(results), "images": results}
