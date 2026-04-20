@@ -21,12 +21,13 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.models.job import Job, JobStatus, StageStatus
-from app.pipeline.stages import features as feat_stage
-from app.pipeline.stages import matching as match_stage
-from app.pipeline.stages import validate as val_stage
-from app.pipeline.stages import sfm as sfm_stage
-from app.storage.local import storage
+from helium.models.job import Job, JobStatus, StageStatus
+from helium.pipeline.stages import features as feat_stage
+from helium.pipeline.stages import matching as match_stage
+from helium.pipeline.stages import validate as val_stage
+from helium.pipeline.stages import sfm as sfm_stage
+from helium.pipeline.runner import _run_stage
+from helium.storage.local import storage
 
 client = TestClient(app)
 
@@ -70,13 +71,13 @@ def test_validate_accepts_valid_images(tmp_path):
 
 
 def test_validate_rejects_missing_file(tmp_path):
-    from app.pipeline.stages.validate import ValidationError
+    from helium.pipeline.stages.validate import ValidationError
     with pytest.raises(ValidationError, match="missing"):
         val_stage.run(tmp_path, ["ghost.jpg"])
 
 
 def test_validate_rejects_tiny_image(tmp_path):
-    from app.pipeline.stages.validate import ValidationError
+    from helium.pipeline.stages.validate import ValidationError
     img = np.zeros((40, 40, 3), dtype=np.uint8)
     cv2.imwrite(str(tmp_path / "tiny.jpg"), img)
     with pytest.raises(ValidationError, match="too small"):
@@ -155,9 +156,6 @@ def test_sfm_returns_placeholder_when_pycolmap_missing(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_runner_marks_placeholder_stage_skipped():
-    from app.pipeline.runner import _run_stage
-    from app.models.job import Job, StageStatus
-
     job = Job()
     storage.create_job_dirs(job.id)
     storage.save_job(job)
@@ -172,9 +170,6 @@ def test_runner_marks_placeholder_stage_skipped():
 
 
 def test_runner_marks_real_stage_completed_with_artifacts():
-    from app.pipeline.runner import _run_stage
-    from app.models.job import Job, StageStatus
-
     job = Job()
     storage.create_job_dirs(job.id)
     storage.save_job(job)
