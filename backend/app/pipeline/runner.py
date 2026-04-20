@@ -13,16 +13,58 @@ sfm hasn't run. The job is only marked real_reconstruction=True when sfm
 produces expected artifacts (sparse.ply + cameras.json).
 """
 
+import asyncio
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+from ..config import settings
+from ..db.repository import JobRepository
 from ..models.job import Job, JobStatus, StageStatus
 from ..pipeline.stages import dense, export, features, matching, sfm, validate
 from ..storage.local import storage
 
 _PLACEHOLDER_STATUS = "placeholder"
+
+
+def _make_engine():
+    url = settings.database_url
+    if url.startswith("sqlite"):
+        from sqlalchemy.pool import StaticPool
+        return create_async_engine(url, connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    return create_async_engine(url, connect_args={"ssl": True}, pool_size=1, max_overflow=0)
+
+
+async def _db_save(job: Job) -> None:
+    engine = _make_engine()
+    try:
+        session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        async with session_factory() as session:
+            await JobRepository(session).save(job)
+            await session.commit()
+    finally:
+        await engine.dispose()
+
+
+async def _db_load(job_id: str) -> Optional[Job]:
+    engine = _make_engine()
+    try:
+        session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        async with session_factory() as session:
+            return await JobRepository(session).get(job_id)
+    finally:
+        await engine.dispose()
+
+
+def _save_job(job: Job) -> None:
+    asyncio.run(_db_save(job))
+
+
+def _load_job(job_id: str) -> Optional[Job]:
+    return asyncio.run(_db_load(job_id))
 
 
 def _run_stage(
@@ -34,8 +76,8 @@ def _run_stage(
 ) -> Dict[str, Any]:
     stage = job.stages[stage_name]
     stage.status = StageStatus.RUNNING
-    stage.started_at = datetime.utcnow()
-    storage.save_job(job)
+    stage.started_at = datetime.now(timezone.utc)
+    _save_job(job)
 
     try:
         result = fn(*args, **kwargs)
@@ -49,16 +91,16 @@ def _run_stage(
             if isinstance(result, dict) and "artifacts" in result:
                 stage.artifacts = list(result["artifacts"])
 
-        stage.completed_at = datetime.utcnow()
-        storage.save_job(job)
+        stage.completed_at = datetime.now(timezone.utc)
+        _save_job(job)
         return result
     except Exception as exc:
         stage.status = StageStatus.FAILED
         stage.message = str(exc)
-        stage.completed_at = datetime.utcnow()
+        stage.completed_at = datetime.now(timezone.utc)
         job.status = JobStatus.FAILED
         job.error = f"Stage '{stage_name}' failed: {exc}"
-        storage.save_job(job)
+        _save_job(job)
         raise
 
 
@@ -67,16 +109,16 @@ def _skip_remaining(job: Job, from_index: int) -> None:
     for name in stages[from_index:]:
         if job.stages[name].status == StageStatus.PENDING:
             job.stages[name].status = StageStatus.SKIPPED
-    storage.save_job(job)
+    _save_job(job)
 
 
 def run_pipeline(job_id: str) -> None:
-    job = storage.load_job(job_id)
+    job = _load_job(job_id)
     if job is None:
         return
 
     job.status = JobStatus.RUNNING
-    storage.save_job(job)
+    _save_job(job)
 
     images_dir: Path = storage.images_dir(job_id)
     artifacts_dir: Path = storage.artifacts_dir(job_id)
@@ -101,7 +143,7 @@ def run_pipeline(job_id: str) -> None:
                     job.artifacts.cameras_json = rel
 
         job.status = JobStatus.COMPLETED
-        storage.save_job(job)
+        _save_job(job)
 
     except Exception:
         failed_index = next(
