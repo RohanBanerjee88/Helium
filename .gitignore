@@ -28,6 +28,7 @@ Thumbs.db
 
 # Claude context
 CLAUDE.md
+AGENTS.md
 
 # Terraform
 infra/.terraform/
