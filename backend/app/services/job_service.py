@@ -1,28 +1,28 @@
 from typing import List, Optional
 
-from ..db.repository import JobRepository
 from ..models.job import Job
 from ..storage.local import storage
 
 
-async def create_job(repo: JobRepository) -> Job:
+def create_job() -> Job:
     job = Job()
     storage.create_job_dirs(job.id)
-    return await repo.create(job)
+    storage.save_job(job)
+    return job
 
 
-async def get_job(job_id: str, repo: JobRepository) -> Optional[Job]:
-    return await repo.get(job_id)
+def get_job(job_id: str) -> Optional[Job]:
+    return storage.load_job(job_id)
 
 
-async def list_jobs(repo: JobRepository) -> List[Job]:
-    return await repo.list_all()
+def list_jobs() -> List[Job]:
+    jobs = []
+    for job_id in storage.list_job_ids():
+        job = storage.load_job(job_id)
+        if job is not None:
+            jobs.append(job)
+    return sorted(jobs, key=lambda j: j.created_at, reverse=True)
 
 
-async def save_job(job: Job, repo: JobRepository) -> Job:
-    return await repo.save(job)
-
-
-async def delete_job(job_id: str, repo: JobRepository) -> None:
+def delete_job(job_id: str) -> None:
     storage.delete_job(job_id)
-    await repo.delete(job_id)

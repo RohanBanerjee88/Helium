@@ -7,8 +7,6 @@ so they run without Docker and leave no residue.
 
 import io
 import os
-import tempfile
-from pathlib import Path
 from unittest.mock import patch
 
 import cv2
@@ -16,12 +14,7 @@ import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
-# Point storage at a temp dir before importing the app
-_tmp = tempfile.mkdtemp()
-os.environ["HELIUM_DATA_DIR"] = _tmp
-os.environ["HELIUM_MIN_IMAGES"] = "2"  # lower limit so tests don't need 8 real images
-
-from app.main import app  # noqa: E402  (must come after env var is set)
+from app.main import app
 
 client = TestClient(app)
 
