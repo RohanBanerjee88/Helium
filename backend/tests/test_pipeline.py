@@ -11,18 +11,12 @@ These tests verify:
 
 import io
 import os
-import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
 import cv2
 import numpy as np
 import pytest
-
-# Ensure env is configured before app is imported
-if "HELIUM_DATA_DIR" not in os.environ:
-    os.environ["HELIUM_DATA_DIR"] = tempfile.mkdtemp()
-    os.environ["HELIUM_MIN_IMAGES"] = "2"
 
 from fastapi.testclient import TestClient
 

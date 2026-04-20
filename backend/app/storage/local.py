@@ -1,7 +1,7 @@
 import os
 import shutil
 import tempfile
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -19,7 +19,7 @@ class LocalStorage:
           matches/        pairwise match files
           point_cloud/    sparse + dense PLY files
           mesh/           OBJ / STL exports
-        metadata.json     job state
+        metadata.json     job state (atomic write on every status change)
     """
 
     def __init__(self) -> None:
@@ -56,9 +56,9 @@ class LocalStorage:
     # --- Persistence ---
 
     def save_job(self, job: Job) -> None:
-        job.updated_at = datetime.utcnow()
+        job.updated_at = datetime.now(timezone.utc)
         path = self.metadata_path(job.id)
-        # Atomic write: write to temp file then rename to avoid partial reads
+        # Atomic write: write to sibling temp file, then rename
         with tempfile.NamedTemporaryFile(
             mode="w", dir=str(path.parent), delete=False, suffix=".tmp"
         ) as tmp:

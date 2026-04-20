@@ -1,17 +1,7 @@
-from contextlib import asynccontextmanager
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .api.routes import artifacts, jobs, upload
-from .db import engine
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    yield
-    await engine.dispose()
-
 
 app = FastAPI(
     title="Helium",
@@ -20,7 +10,6 @@ app = FastAPI(
         "Upload 8–20 photos of an object and get a 3D model."
     ),
     version="0.1.0",
-    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -36,5 +25,5 @@ app.include_router(artifacts.router)
 
 
 @app.get("/health", tags=["meta"])
-async def health() -> dict:
+def health() -> dict:
     return {"status": "ok", "version": "0.1.0"}
