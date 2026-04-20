@@ -24,7 +24,12 @@ _LOWE_RATIO = 0.75
 _MIN_DESCRIPTORS = 2
 
 
-def run(images_dir: Path, artifacts_dir: Path, image_files: List[str]) -> Dict[str, Any]:
+def run(
+    images_dir: Path,
+    artifacts_dir: Path,
+    image_files: List[str],
+    progress_callback=None,
+) -> Dict[str, Any]:
     features_dir = artifacts_dir / "features"
     matches_dir = artifacts_dir / "matches"
     matches_dir.mkdir(parents=True, exist_ok=True)
@@ -75,6 +80,8 @@ def run(images_dir: Path, artifacts_dir: Path, image_files: List[str]) -> Dict[s
 
         pairs_processed += 1
         total_good += len(good)
+        if progress_callback is not None:
+            progress_callback(i, j, len(good))
 
     return {
         "pairs_processed": pairs_processed,

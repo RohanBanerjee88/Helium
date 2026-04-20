@@ -33,7 +33,9 @@ jobs:
 
       - name: Install Python dependencies
         working-directory: backend
-        run: pip install --no-cache-dir -r requirements.txt
+        run: |
+          pip install -e ..
+          pip install --no-cache-dir -r requirements.txt
 
       - name: Run tests
         working-directory: backend
