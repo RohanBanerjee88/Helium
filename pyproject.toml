@@ -16,6 +16,7 @@ dependencies = [
     "numpy>=1.26.0",
     "pydantic>=2.6.0",
     "pydantic-settings>=2.2.0",
+    "prompt_toolkit>=3.0.0",
     # open3d and trimesh are optional: large binaries, not required for feature extraction
     # install with: pip install helium-3d[full]
 ]
