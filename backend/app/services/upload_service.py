@@ -53,24 +53,32 @@ def save_images(job: Job, files: List[UploadFile]) -> List[str]:
 
     images_dir = storage.images_dir(job.id)
     saved: List[str] = []
+    saved_paths: List[Path] = []
 
-    for idx, file in enumerate(files):
-        ext = Path(file.filename).suffix.lower() if file.filename else ".jpg"
-        filename = f"img_{idx:03d}{ext}"
-        dest = images_dir / filename
+    try:
+        for idx, file in enumerate(files):
+            ext = Path(file.filename).suffix.lower() if file.filename else ".jpg"
+            filename = f"img_{idx:03d}{ext}"
+            dest = images_dir / filename
 
-        with open(dest, "wb") as out:
-            shutil.copyfileobj(file.file, out)
+            with open(dest, "wb") as out:
+                shutil.copyfileobj(file.file, out)
 
-        file_size_mb = dest.stat().st_size / (1024 * 1024)
-        if file_size_mb > settings.max_image_size_mb:
-            dest.unlink(missing_ok=True)
-            raise HTTPException(
-                status_code=400,
-                detail=f"Image '{file.filename}' exceeds {settings.max_image_size_mb} MB limit "
-                       f"({file_size_mb:.1f} MB).",
-            )
+            saved_paths.append(dest)
 
-        saved.append(filename)
+            file_size_mb = dest.stat().st_size / (1024 * 1024)
+            if file_size_mb > settings.max_image_size_mb:
+                dest.unlink(missing_ok=True)
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Image '{file.filename}' exceeds {settings.max_image_size_mb} MB limit "
+                           f"({file_size_mb:.1f} MB).",
+                )
+
+            saved.append(filename)
+    except Exception:
+        for path in saved_paths:
+            path.unlink(missing_ok=True)
+        raise
 
     return saved

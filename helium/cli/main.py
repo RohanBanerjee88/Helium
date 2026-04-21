@@ -408,6 +408,18 @@ def config_cmd() -> None:
         ("min_images",         str(settings.min_images),         "HELIUM_MIN_IMAGES"),
         ("max_images",         str(settings.max_images),         "HELIUM_MAX_IMAGES"),
         ("max_image_size_mb",  str(settings.max_image_size_mb),  "HELIUM_MAX_IMAGE_SIZE_MB"),
+        ("colmap_bin",         str(settings.colmap_bin),         "HELIUM_COLMAP_BIN"),
+        ("colmap_camera_model", str(settings.colmap_camera_model), "HELIUM_COLMAP_CAMERA_MODEL"),
+        (
+            "colmap_sift_max_num_features",
+            str(settings.colmap_sift_max_num_features),
+            "HELIUM_COLMAP_SIFT_MAX_NUM_FEATURES",
+        ),
+        (
+            "colmap_min_registered_images",
+            str(settings.colmap_min_registered_images),
+            "HELIUM_COLMAP_MIN_REGISTERED_IMAGES",
+        ),
     ]
 
     t = Table(box=None, show_header=True, header_style="bold", padding=(0, 2))

@@ -15,6 +15,7 @@ class LocalStorage:
       {data_dir}/jobs/{job_id}/
         images/           raw uploaded / copied source images
         artifacts/
+          colmap_workspace/ persisted COLMAP database + sparse models
           features/       keypoints + descriptors per image
           matches/        pairwise match files
           point_cloud/    sparse + dense PLY files

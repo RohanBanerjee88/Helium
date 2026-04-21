@@ -10,12 +10,13 @@ Upload 8–20 photos of a real-world object and Helium runs a photogrammetry-sty
 - Validates images (format, size, decodability)
 - Extracts SIFT keypoints and descriptors (OpenCV)
 - Matches features between all image pairs (Lowe ratio test)
+- Runs sparse Structure-from-Motion with the COLMAP CLI
 - Tracks per-job, per-stage status in real time
-- Placeholder hooks for SfM (COLMAP), dense reconstruction, and mesh export
+- Persists the COLMAP workspace for future dense reconstruction
+- Placeholder hooks for dense reconstruction and mesh export
 
 ## What it does NOT do yet
 
-- Full camera pose estimation (COLMAP integration is a TODO stub)
 - Dense multi-view stereo reconstruction
 - Mesh repair or guaranteed print-ready output
 - Handle reflective, transparent, or dark objects
@@ -47,6 +48,10 @@ docker-compose up --build
 
 API available at `http://localhost:8000`  
 Docs at `http://localhost:8000/docs`
+
+Docker is the canonical supported runtime for COLMAP. The image installs the
+`colmap` executable so sparse reconstruction works out of the box in the
+container.
 
 ### Upload images
 
@@ -84,6 +89,10 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8000
 ```
 
+For host-local sparse reconstruction, install the `colmap` CLI separately and
+ensure it is available on `PATH`, or point Helium at it with
+`HELIUM_COLMAP_BIN=/absolute/path/to/colmap`.
+
 ---
 
 ## Project structure
@@ -108,7 +117,7 @@ helium/
 │   │   │       ├── validate.py  # Image validation (OpenCV)
 │   │   │       ├── features.py  # SIFT feature extraction
 │   │   │       ├── matching.py  # BFMatcher + Lowe ratio
-│   │   │       ├── sfm.py       # TODO: COLMAP / SfM integration
+│   │   │       ├── sfm.py       # COLMAP CLI sparse reconstruction
 │   │   │       ├── dense.py     # TODO: dense reconstruction
 │   │   │       └── export.py    # TODO: mesh export (trimesh / Open3D)
 │   │   └── storage/
@@ -134,7 +143,7 @@ helium/
 | 1 — Upload + Jobs | ✅ Done | POST /upload, job creation, file storage |
 | 2 — Pipeline Skeleton | ✅ Done | Background runner, 6 stages wired |
 | 3 — Real CV | ✅ Done | SIFT features, BFMatcher, Lowe ratio |
-| 4 — SfM Integration | 🔲 TODO | COLMAP subprocess or pycolmap |
+| 4 — SfM Integration | ✅ Done | COLMAP CLI sparse reconstruction + workspace persistence |
 | 5 — Dense + Export | 🔲 TODO | Open3D MVS, Poisson mesh, trimesh STL/OBJ |
 
 ## Contributing

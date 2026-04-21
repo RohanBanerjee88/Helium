@@ -2,8 +2,9 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# System deps required by OpenCV and Open3D
+# System deps required by OpenCV, Open3D, and COLMAP CLI
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    colmap \
     libgl1 \
     libglx-mesa0 \
     libglib2.0-0 \

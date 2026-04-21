@@ -1,3 +1,4 @@
+import logging
 from typing import List
 
 from fastapi import APIRouter, BackgroundTasks, File, HTTPException, UploadFile
@@ -8,6 +9,7 @@ from ...services import job_service, upload_service
 from ...storage.local import storage
 
 router = APIRouter(tags=["upload"])
+logger = logging.getLogger(__name__)
 
 
 @router.post("/upload", response_model=Job, status_code=201)
@@ -37,6 +39,11 @@ async def upload_images(
     job.images = saved
     storage.save_job(job)
 
+    logger.info(
+        "Queued reconstruction job %s with %d image(s)",
+        job.id,
+        len(saved),
+    )
     background_tasks.add_task(start_pipeline_async, job.id)
 
     return job

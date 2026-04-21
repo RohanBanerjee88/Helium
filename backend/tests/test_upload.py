@@ -15,6 +15,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
+from helium.storage.local import storage
 
 client = TestClient(app)
 
@@ -72,6 +73,24 @@ def test_upload_bad_content_type():
     files = [("files", ("doc.pdf", io.BytesIO(b"%PDF-1.4"), "application/pdf"))]
     resp = client.post("/upload", files=files)
     assert resp.status_code == 400
+
+
+def test_failed_upload_cleans_up_partial_job_state():
+    before = set(storage.list_job_ids())
+    oversized = b"x" * (2 * 1024 * 1024)
+
+    with patch("app.services.upload_service.settings.max_image_size_mb", 1):
+        resp = client.post(
+            "/upload",
+            files=[
+                ("files", ("photo_ok.jpg", io.BytesIO(_make_jpeg()), "image/jpeg")),
+                ("files", ("photo_big.jpg", io.BytesIO(oversized), "image/jpeg")),
+            ],
+        )
+
+    assert resp.status_code == 400
+    after = set(storage.list_job_ids())
+    assert after == before
 
 
 # --- jobs ---

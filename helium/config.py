@@ -11,6 +11,10 @@ class Settings(BaseSettings):
     min_images: int = 8
     max_images: int = 20
     max_image_size_mb: int = 20
+    colmap_bin: str = "colmap"
+    colmap_camera_model: str = "SIMPLE_RADIAL"
+    colmap_sift_max_num_features: int = 8192
+    colmap_min_registered_images: int = 3
 
     host: str = "0.0.0.0"
     port: int = 8000

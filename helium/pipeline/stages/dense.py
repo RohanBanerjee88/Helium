@@ -20,6 +20,7 @@ Option C — OpenMVS:
 Expected inputs:
     artifacts/point_cloud/sparse.ply      — from sfm stage
     artifacts/point_cloud/cameras.json    — camera poses from sfm stage
+    artifacts/colmap_workspace/           — persisted COLMAP workspace for dense prep
 
 Expected outputs:
     artifacts/point_cloud/dense.ply       — dense point cloud

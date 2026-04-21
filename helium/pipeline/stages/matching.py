@@ -22,6 +22,7 @@ import numpy as np
 
 _LOWE_RATIO = 0.75
 _MIN_DESCRIPTORS = 2
+_MIN_VIABLE_PAIRS = 1
 
 
 def run(
@@ -39,6 +40,7 @@ def run(
 
     pairs_processed = 0
     total_good = 0
+    viable_pairs = 0
 
     for i, j in combinations(range(len(stems)), 2):
         desc_i_path = features_dir / f"{stems[i]}_descriptors.npy"
@@ -80,11 +82,20 @@ def run(
 
         pairs_processed += 1
         total_good += len(good)
+        if good:
+            viable_pairs += 1
         if progress_callback is not None:
             progress_callback(i, j, len(good))
+
+    if pairs_processed == 0 or viable_pairs < _MIN_VIABLE_PAIRS:
+        raise RuntimeError(
+            "Feature matching produced no viable image pairs. "
+            "Use photos with more overlap, sharper focus, and more visible texture."
+        )
 
     return {
         "pairs_processed": pairs_processed,
         "total_good_matches": total_good,
+        "viable_pairs": viable_pairs,
         "avg_good_per_pair": round(total_good / pairs_processed, 1) if pairs_processed else 0,
     }
