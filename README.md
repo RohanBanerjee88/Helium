@@ -1,159 +1,164 @@
 # Helium
 
-**Local-first speech research backend for speaker diarization, source separation, and controllable voice conversion.**
+**Local-first speech research scaffold for speaker diarization, source separation, and controllable voice conversion.**
 
-Helium is now aimed at a research workflow, not cloud hosting. The project is designed to orchestrate local audio jobs, keep every intermediate artifact on disk, and make it easy to compare open-source backends for:
-
-- speaker diarization in crowded or noisy scenes
-- two-speaker speech separation
-- style-preserving voice conversion
-- evaluation and experiment tracking for publishable work
-
-## Current Scope
-
-Helium currently provides:
-
-- a FastAPI backend for uploading 1-6 WAV files
-- a local CLI for running the same pipeline on folders of audio
-- a job model with stage-by-stage tracking
-- audio validation with metadata export
-- research scaffold stages for diarization, separation, conversion, evaluation, and export
-- placeholder artifacts that document how to plug in local Hugging Face-compatible backends
-
-Helium does not yet bundle pretrained diarization, separation, or voice conversion checkpoints. That is deliberate: the goal is to keep the repo open-source, local-first, and research-friendly instead of tightly coupling it to one gated stack.
+Helium is a research codebase — there is no CLI or HTTP API. Interaction with the pipeline and models happens through standalone Python scripts in `scripts/`. This keeps the research loop tight: edit a stage, run a script, inspect artifacts on disk.
 
 ## Research Direction
 
-The current target problem is:
+Target problem: `noisy two-speaker speech disentanglement + style-preserving voice conversion`
 
-`noisy two-speaker speech disentanglement + style-preserving voice conversion`
+Example: two people speaking in a cafe → detect two distinct speakers → isolate each → convert one speaker's voice to a different timbre while preserving words, rhythm, and turn-taking.
 
-Example use case:
+## Setup
 
-- two people speaking in a cafe
-- detect two distinct speakers
-- isolate each speaker
-- convert one speaker to a different target timbre while preserving words, rhythm, and turn-taking
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -e .
+
+# Optional: full metrics suite
+pip install -e ".[metrics]"
+
+# Optional: PyTorch for model backends
+pip install -e ".[research]"
+```
+
+Copy `.env.example` to `.env` and adjust `HELIUM_DATA_DIR` if needed (default: `~/.helium`).
+
+## Scripts
+
+All interaction with the pipeline happens through scripts in `scripts/`.
+
+### Run the pipeline on audio files
+
+```bash
+python scripts/run_pipeline.py --audio-dir ./sample_audio
+python scripts/run_pipeline.py --audio-dir ./sample_audio --target-speakers 2 --output ./results
+```
+
+Stages run in order: `validate → diarize → separate → convert → evaluate → export`
+
+Scaffold stages (diarize, separate, convert) are marked SKIPPED until you wire in a local model backend. Edit the corresponding file under `helium/pipeline/stages/` and replace the placeholder return with real inference.
+
+### Run a benchmark evaluation
+
+```bash
+python scripts/run_benchmark.py --dataset libri2mix --data-dir /data/Libri2Mix --output ./benchmark_results
+python scripts/run_benchmark.py --dataset whamr --data-dir /data/whamr --split tt --n-samples 100
+python scripts/run_benchmark.py --dataset voxceleb --data-dir /data/VoxCeleb
+```
+
+Supported datasets: `libri2mix`, `whamr`, `voxceleb`
+
+To evaluate a custom model, define a `separation_fn` and pass it in `scripts/run_benchmark.py`:
+
+```python
+def my_model(mixture_path, sample_rate):
+    # load your model, run inference
+    return [estimate_s1_array, estimate_s2_array]
+
+separation_fn = my_model  # line ~60 in run_benchmark.py
+```
+
+### Compute metrics on existing files
+
+```bash
+# Separation metrics (SI-SDR, SDR, PIT-SI-SDR, improvements)
+python scripts/compute_metrics.py separation \
+    --reference s1_ref.wav s2_ref.wav \
+    --estimate  s1_est.wav s2_est.wav \
+    --mixture   mixture.wav
+
+# Diarization error rate
+python scripts/compute_metrics.py diarization \
+    --reference ref_turns.rttm --hypothesis hyp_turns.rttm
+
+# Blind source coherence (no reference required)
+python scripts/compute_metrics.py coherence --sources s1_est.wav s2_est.wav
+
+# Speaker similarity (requires resemblyzer or speechbrain)
+python scripts/compute_metrics.py speaker-sim --audio-a spk_a.wav --audio-b spk_b.wav
+
+# Word error rate (requires faster-whisper or openai-whisper)
+python scripts/compute_metrics.py wer --audio output.wav --reference-text "the quick brown fox"
+```
+
+## Plugging In a Model
+
+Each scaffold stage lives in `helium/pipeline/stages/`. To wire in a model:
+
+1. Open the stage file (e.g. `helium/pipeline/stages/separate.py`)
+2. Load your model at the top of the `run()` function
+3. Replace `return {"status": "placeholder", ...}` with real inference and return a dict with `"artifacts"` pointing to the files you wrote
+
+The `evaluate` and `export` stages are already implemented and will automatically pick up any outputs written by the model stages.
 
 ## Suggested Baselines
 
-- Diarization: `pyannote/speaker-diarization`
-- Separation: `speechbrain/sepformer-whamr`
-- Voice conversion: `RedRepter/seed-vc-api`
-
-These are not hardcoded into the repo yet, but the scaffold writes per-stage planning artifacts that point to them.
-
-## Quick Start
-
-```bash
-cp .env.example .env
-docker-compose up --build
-```
-
-API available at `http://localhost:8000`  
-Docs at `http://localhost:8000/docs`
-
-### Upload audio
-
-```bash
-curl -X POST http://localhost:8000/upload \
-  -F "files=@mixture.wav" \
-  -F "files=@target_reference.wav"
-```
-
-Response includes a `job_id`.
-
-### Check job status
-
-```bash
-curl http://localhost:8000/jobs/{job_id}
-```
-
-### Get a compact summary
-
-```bash
-curl http://localhost:8000/jobs/{job_id}/summary
-```
-
-## Local Development
-
-```bash
-cd backend
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8000
-```
-
-## CLI
-
-Run the local pipeline on a directory of WAV files:
-
-```bash
-helium run ./sample_audio --target-speakers 2
-```
-
-Inspect jobs:
-
-```bash
-helium jobs list
-helium jobs show <job-id>
-```
-
-## Pipeline
-
-The current stage order is:
-
-1. `validate`
-2. `diarize`
-3. `separate`
-4. `convert`
-5. `evaluate`
-6. `export`
-
-Only `validate`, `evaluate`, and `export` are implemented as real scaffold stages today. The model-backed stages currently emit planning artifacts and are marked as skipped until you wire in local backends.
+| Task | Model |
+|---|---|
+| Diarization | `pyannote/speaker-diarization` |
+| Separation | `speechbrain/sepformer-whamr` |
+| Voice conversion | `RedRepter/seed-vc-api` |
 
 ## Project Structure
 
 ```text
 helium/
-├── backend/
-│   ├── app/
-│   │   ├── api/routes/
-│   │   │   ├── upload.py
-│   │   │   ├── jobs.py
-│   │   │   └── artifacts.py
-│   │   ├── services/
-│   │   │   ├── job_service.py
-│   │   │   └── upload_service.py
-│   │   └── main.py
-│   └── tests/
-├── helium/
-│   ├── cli/
-│   ├── models/job.py
-│   ├── pipeline/
-│   │   ├── runner.py
-│   │   └── stages/
-│   │       ├── validate.py
-│   │       ├── diarize.py
-│   │       ├── separate.py
-│   │       ├── convert.py
-│   │       ├── evaluate.py
-│   │       └── export.py
-│   └── storage/local.py
-└── README.md
+├── config.py               pydantic-settings: data_dir, backends, speaker count
+├── models/job.py           Job, StageResult, JobArtifacts, JobStatus
+├── pipeline/
+│   ├── runner.py           Sequential stage runner with atomic job state saves
+│   └── stages/
+│       ├── validate.py     IMPLEMENTED — WAV inspection + metadata
+│       ├── diarize.py      SCAFFOLD — emits planning JSON, plug in pyannote here
+│       ├── separate.py     SCAFFOLD — emits planning JSON, plug in SepFormer here
+│       ├── convert.py      SCAFFOLD — emits planning JSON, plug in Seed-VC here
+│       ├── evaluate.py     IMPLEMENTED — separation/diarization/WER metrics
+│       └── export.py       IMPLEMENTED — artifact manifest
+├── metrics/
+│   ├── separation.py       SI-SDR, SDR, SDRi, SI-SDRi, PIT-SI-SDR, blind_coherence
+│   ├── diarization.py      DER from RTTM files
+│   ├── speaker_sim.py      cosine_similarity, compute_speaker_similarity
+│   └── content.py          wer, cer, compute_wer_from_audio
+├── benchmarks/
+│   ├── runner.py           Evaluation loop over a dataset, writes CSV + summary.json
+│   └── datasets/           Libri2Mix, WHAMR!, VoxCeleb dataset interfaces
+└── storage/local.py        All filesystem I/O: job dirs, artifact paths, atomic saves
+scripts/
+├── run_pipeline.py         Run full pipeline on a WAV directory
+├── run_benchmark.py        Benchmark evaluation on standard datasets
+└── compute_metrics.py      Compute individual metrics on existing files
+```
+
+## Artifact Layout
+
+Each pipeline run creates a job directory under `~/.helium/jobs/{job_id}/`:
+
+```text
+{job_id}/
+  audio/                    source WAV files
+  artifacts/
+    manifests/              validation_report.json
+    diarization/            diarization_plan.json → speaker_turns.rttm (when wired)
+    separation/             separation_plan.json → speaker_0.wav, speaker_1.wav
+    conversion/             conversion_plan.json → converted WAVs
+    evaluation/             metrics.json, experiment_summary.json, metrics.csv
+    export/                 run_manifest.json
+  metadata.json             full job state (JSON)
 ```
 
 ## Roadmap
 
 | Phase | Status | Description |
 |---|---|---|
-| 0 - Pivot | ✅ Done | Repo moved from 3D reconstruction to speech research scaffold |
-| 1 - Audio Jobs | ✅ Done | WAV uploads, local storage, job model, CLI |
-| 2 - Research Scaffolding | ✅ Done | Diarization, separation, conversion, evaluation, export stages |
-| 3 - Local Baselines | 🔲 TODO | Plug in pyannote, SepFormer, Seed-VC locally |
-| 4 - Benchmarking | 🔲 TODO | Add Libri2Mix/WHAMR/VoxCeleb evaluation harness |
-| 5 - Research Contribution | 🔲 TODO | Build and evaluate a diarization-guided conversion improvement |
+| 0 - Pivot | Done | Repo moved from 3D reconstruction to speech research scaffold |
+| 1 - Audio Jobs | Done | WAV storage, job model, pipeline runner |
+| 2 - Research Scaffolding | Done | All six pipeline stages, planning artifacts |
+| 3 - Local Baselines | TODO | Plug in pyannote, SepFormer, Seed-VC locally |
+| 4 - Benchmarking | TODO | Evaluate on Libri2Mix / WHAMR / VoxCeleb |
+| 5 - Research Contribution | TODO | Diarization-guided conversion improvement |
 
 ## License
 
