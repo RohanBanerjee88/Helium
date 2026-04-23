@@ -1,4 +1,4 @@
-name: Backend Unit Tests
+name: Tests
 
 on:
   push:
@@ -19,32 +19,8 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libgl1 \
-            libglx-mesa0 \
-            libglib2.0-0 \
-            libsm6 \
-            libxrender1 \
-            libxext6 \
-            libgomp1
-
-      - name: Install Python dependencies
-        working-directory: backend
-        run: |
-          pip install -e ..
-          pip install --no-cache-dir -r requirements.txt
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
 
       - name: Run tests
-        working-directory: backend
-        run: |
-          set +e
-          pytest tests/ -v
-          EXIT_CODE=$?
-          # Open3D raises SIGABRT during interpreter shutdown (known upstream issue:
-          # https://github.com/isl-org/Open3D/issues/6951). All tests complete before
-          # this happens. Treat exit code 134 (128+SIGABRT) as success.
-          if [ $EXIT_CODE -eq 134 ]; then exit 0; fi
-          exit $EXIT_CODE
+        run: pytest helium/ -v
