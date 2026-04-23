@@ -126,52 +126,117 @@ def _separation_metrics(artifacts_dir: Path) -> Dict[str, Any]:
 
 
 def _diarization_metrics(artifacts_dir: Path) -> Dict[str, Any]:
-    """Report diarization outputs; compute DER if a reference RTTM exists."""
+    """Aggregate diarization outputs from per-file artifacts.
+
+    Reads diarization/manifest.json (written by the real diarize stage) to
+    get per-file stats, then globs *.rttm files for any per-file DER checks.
+    Falls back gracefully when the stage ran in placeholder mode.
+    """
     diar_dir = artifacts_dir / "diarization"
     unavail: Dict[str, Any] = {"status": "unavailable", "reason": "", "values": {}}
 
     if not diar_dir.exists():
         return {**unavail, "reason": "diarization stage has not run"}
 
+    # Real stage writes manifest.json; placeholder stage writes diarization_plan.json
     plan = _load_json(diar_dir / "diarization_plan.json")
     if plan and plan.get("status") == "placeholder":
-        return {**unavail, "reason": "diarization stage ran in placeholder mode — no RTTM outputs yet"}
+        return {
+            **unavail,
+            "reason": (
+                "diarization stage ran in placeholder mode — "
+                f"{plan.get('reason', 'prerequisites not met')}"
+            ),
+        }
 
-    rttm_path = diar_dir / "speaker_turns.rttm"
-    if not rttm_path.exists():
-        return {**unavail, "reason": "speaker_turns.rttm not found in diarization/"}
+    # Prefer the structured manifest written by the real stage
+    manifest = _load_json(diar_dir / "manifest.json")
+    if manifest:
+        return _metrics_from_manifest(diar_dir, manifest, artifacts_dir)
 
-    segments: List[Dict] = []
-    with open(rttm_path) as fh:
-        for line in fh:
-            parts = line.strip().split()
-            if parts and parts[0] == "SPEAKER" and len(parts) >= 8:
-                segments.append({
-                    "onset": float(parts[3]),
-                    "duration": float(parts[4]),
-                    "speaker": parts[7],
-                })
+    # Legacy fallback: look for any *.rttm files written directly
+    rttm_files = sorted(diar_dir.glob("*.rttm"))
+    if not rttm_files:
+        return {**unavail, "reason": "no *.rttm files found in diarization/"}
 
-    speakers = {s["speaker"] for s in segments}
-    total_speech = sum(s["duration"] for s in segments)
+    return _metrics_from_rttm_files(diar_dir, rttm_files)
+
+
+def _metrics_from_manifest(
+    diar_dir: Path, manifest: Dict, artifacts_dir: Path
+) -> Dict[str, Any]:
+    """Build metric summary from diarization/manifest.json."""
+    completed = [f for f in manifest.get("files", []) if f.get("status") == "completed"]
+    if not completed:
+        return {
+            "status": "unavailable",
+            "reason": "diarization manifest present but no files completed successfully",
+            "values": {},
+        }
+
+    total_segments = sum(f.get("segment_count", 0) for f in completed)
+    total_speech = sum(f.get("total_speech_duration_s", 0.0) for f in completed)
+    all_speakers: set = set()
+    for f in completed:
+        all_speakers.update(f.get("speakers", []))
 
     values: Dict[str, Any] = {
-        "segment_count": len(segments),
-        "speaker_count": len(speakers),
+        "files_diarized": len(completed),
+        "segment_count": total_segments,
+        "speaker_count": len(all_speakers),
+        "speakers": sorted(all_speakers),
         "total_speech_duration_s": round(total_speech, 2),
     }
 
-    ref_rttm = diar_dir / "reference_speaker_turns.rttm"
-    if ref_rttm.exists():
-        try:
-            from ...metrics.diarization import der as compute_der
-            der_vals = compute_der(str(ref_rttm), str(rttm_path))
-            values.update({f"DER_{k}": v for k, v in der_vals.items()})
-        except Exception as exc:
-            values["der_error"] = str(exc)
-    else:
-        values["DER"] = "reference RTTM not available (needed for DER computation)"
+    # Per-file DER if a reference RTTM exists alongside the hypothesis
+    der_results: List[Dict] = []
+    for file_meta in completed:
+        stem = file_meta.get("stem", "")
+        hyp_rttm = diar_dir / f"{stem}.rttm"
+        ref_rttm = diar_dir / f"{stem}_reference.rttm"
+        if hyp_rttm.exists() and ref_rttm.exists():
+            try:
+                from ...metrics.diarization import der as compute_der
+                der_results.append(
+                    {"file": stem, **compute_der(str(ref_rttm), str(hyp_rttm))}
+                )
+            except Exception as exc:
+                der_results.append({"file": stem, "der_error": str(exc)})
 
+    if der_results:
+        values["DER_per_file"] = der_results
+        mean_der = sum(r["der"] for r in der_results if "der" in r)
+        values["DER_mean"] = round(mean_der / len(der_results), 4)
+    else:
+        values["DER"] = (
+            "reference RTTM not available — place <stem>_reference.rttm "
+            "alongside <stem>.rttm in diarization/ to enable DER"
+        )
+
+    return {"status": "computed", "values": values}
+
+
+def _metrics_from_rttm_files(diar_dir: Path, rttm_files: List[Path]) -> Dict[str, Any]:
+    """Fallback: aggregate stats from raw *.rttm files with no manifest."""
+    all_segments: List[Dict] = []
+    all_speakers: set = set()
+
+    for rttm_path in rttm_files:
+        with open(rttm_path) as fh:
+            for line in fh:
+                parts = line.strip().split()
+                if parts and parts[0] == "SPEAKER" and len(parts) >= 8:
+                    seg = {"onset": float(parts[3]), "duration": float(parts[4]), "speaker": parts[7]}
+                    all_segments.append(seg)
+                    all_speakers.add(seg["speaker"])
+
+    values: Dict[str, Any] = {
+        "files_diarized": len(rttm_files),
+        "segment_count": len(all_segments),
+        "speaker_count": len(all_speakers),
+        "total_speech_duration_s": round(sum(s["duration"] for s in all_segments), 2),
+        "DER": "reference RTTM not available (needed for DER computation)",
+    }
     return {"status": "computed", "values": values}
 
 
