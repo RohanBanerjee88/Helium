@@ -60,7 +60,7 @@ def run(audio_dir: Path, artifacts_dir: Path, audio_files: List[str]) -> Dict[st
         "total_duration_seconds": total_duration,
         "clips": clips,
         "recommended_backends": {
-            "diarization": "pyannote/speaker-diarization",
+            "diarization": "pyannote/speaker-diarization-community-1",
             "separation": "speechbrain/sepformer-whamr",
             "conversion": "RedRepter/seed-vc-api",
         },

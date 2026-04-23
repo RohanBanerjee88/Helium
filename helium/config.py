@@ -13,7 +13,13 @@ class Settings(BaseSettings):
     max_audio_size_mb: int = 100
     target_speakers: int = 2
 
-    diarization_backend: str = "pyannote/speaker-diarization"
+    # Hugging Face access token — required for gated models (diarization).
+    # Obtain at https://hf.co/settings/tokens (read scope is sufficient).
+    # Accept model conditions at https://hf.co/pyannote/speaker-diarization-community-1
+    hf_token: str = ""
+
+    # Model backends — override with env vars to swap implementations.
+    diarization_backend: str = "pyannote/speaker-diarization-community-1"
     separation_backend: str = "speechbrain/sepformer-whamr"
     conversion_backend: str = "RedRepter/seed-vc-api"
 
