@@ -30,26 +30,30 @@ class StageResult(BaseModel):
 
 
 class JobArtifacts(BaseModel):
-    sparse_ply: Optional[str] = None
-    cameras_json: Optional[str] = None
-    dense_ply: Optional[str] = None
-    mesh_obj: Optional[str] = None
-    mesh_stl: Optional[str] = None
+    validation_report: Optional[str] = None
+    diarization_output: Optional[str] = None
+    separation_output: Optional[str] = None
+    conversion_output: Optional[str] = None
+    evaluation_report: Optional[str] = None
+    export_manifest: Optional[str] = None
 
 
-PIPELINE_STAGES = ["validate", "features", "matching", "sfm", "dense", "export"]
+PIPELINE_STAGES = ["validate", "diarize", "separate", "convert", "evaluate", "export"]
 
 
 class Job(BaseModel):
+    model_config = {"protected_namespaces": ()}
+
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     status: JobStatus = JobStatus.PENDING
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    image_count: int = 0
-    images: List[str] = Field(default_factory=list)
+    audio_count: int = 0
+    audio_files: List[str] = Field(default_factory=list)
     stages: Dict[str, StageResult] = Field(
         default_factory=lambda: {s: StageResult() for s in PIPELINE_STAGES}
     )
     error: Optional[str] = None
     artifacts: JobArtifacts = Field(default_factory=JobArtifacts)
-    real_reconstruction: bool = False
+    target_speakers: int = 2
+    model_outputs_ready: bool = False

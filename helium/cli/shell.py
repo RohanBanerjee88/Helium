@@ -1,9 +1,9 @@
 """
 Helium interactive shell.
 
-A persistent REPL session for reconstruction work — tab-completes commands
-and job IDs, keeps history across sessions, and dispatches to the same
-functions used by the one-shot CLI commands.
+A persistent REPL session for local speech research runs. It tab-completes
+commands and job IDs, keeps history across sessions, and dispatches to the
+same functions used by the one-shot CLI commands.
 
 Launch with:  helium shell
 """
@@ -27,8 +27,8 @@ from helium.storage.local import storage
 console = Console()
 
 _COMMANDS: dict[str, str] = {
-    "run":    "<photos-dir> [--min-images N] [--output <dir>] [-v]",
-    "jobs":   "list all reconstruction jobs",
+    "run":    "<audio-dir> [--min-audio-files N] [--max-audio-files N] [--target-speakers N] [--output <dir>]",
+    "jobs":   "list all speech research jobs",
     "show":   "<job-id>  — full stage detail",
     "open":   "<job-id>  — open job dir in file manager",
     "clean":  "<job-id> [-y]  — delete a job and its files",
@@ -79,7 +79,7 @@ class _Completer(Completer):
                     continue
                 job = storage.load_job(job_id)
                 meta = (
-                    f"{job.status.value} · {job.image_count} img(s)" if job else ""
+                    f"{job.status.value} · {job.audio_count} clip(s)" if job else ""
                 )
                 yield Completion(
                     job_id[:12],
@@ -105,60 +105,67 @@ def _call(fn) -> None:
 def _dispatch_run(rest: list[str]) -> None:
     from helium.cli.main import run as cmd_run
 
-    photos_dir: Optional[Path] = None
-    min_images: int = settings.min_images
-    max_images: int = settings.max_images
+    audio_dir: Optional[Path] = None
+    min_audio_files: int = settings.min_audio_files
+    max_audio_files: int = settings.max_audio_files
+    target_speakers: int = settings.target_speakers
     output: Optional[Path] = None
-    verbose: bool = False
 
     i = 0
     while i < len(rest):
         a = rest[i]
-        if a == "--min-images" and i + 1 < len(rest):
+        if a == "--min-audio-files" and i + 1 < len(rest):
             try:
-                min_images = int(rest[i + 1])
+                min_audio_files = int(rest[i + 1])
             except ValueError:
-                console.print("[red]Error:[/red] --min-images requires an integer")
+                console.print("[red]Error:[/red] --min-audio-files requires an integer")
                 return
             i += 2
-        elif a == "--max-images" and i + 1 < len(rest):
+        elif a == "--max-audio-files" and i + 1 < len(rest):
             try:
-                max_images = int(rest[i + 1])
+                max_audio_files = int(rest[i + 1])
             except ValueError:
-                console.print("[red]Error:[/red] --max-images requires an integer")
+                console.print("[red]Error:[/red] --max-audio-files requires an integer")
+                return
+            i += 2
+        elif a == "--target-speakers" and i + 1 < len(rest):
+            try:
+                target_speakers = int(rest[i + 1])
+            except ValueError:
+                console.print("[red]Error:[/red] --target-speakers requires an integer")
                 return
             i += 2
         elif a in ("--output", "-o") and i + 1 < len(rest):
             output = Path(rest[i + 1])
             i += 2
-        elif a in ("--verbose", "-v"):
-            verbose = True
-            i += 1
         elif not a.startswith("-"):
-            photos_dir = Path(a)
+            audio_dir = Path(a)
             i += 1
         else:
             console.print(f"[dim]Unknown option skipped: {a}[/dim]")
             i += 1
 
-    if photos_dir is None:
-        console.print("[dim]Usage: run <photos-dir> [--min-images N] [--output <dir>] [-v][/dim]")
+    if audio_dir is None:
+        console.print(
+            "[dim]Usage: run <audio-dir> [--min-audio-files N] [--max-audio-files N] "
+            "[--target-speakers N] [--output <dir>][/dim]"
+        )
         return
 
-    if not photos_dir.exists():
-        console.print(f"[red]Error:[/red] path not found: {photos_dir}")
+    if not audio_dir.exists():
+        console.print(f"[red]Error:[/red] path not found: {audio_dir}")
         return
 
-    if not photos_dir.is_dir():
-        console.print(f"[red]Error:[/red] not a directory: {photos_dir}")
+    if not audio_dir.is_dir():
+        console.print(f"[red]Error:[/red] not a directory: {audio_dir}")
         return
 
     _call(lambda: cmd_run(
-        photos=photos_dir,
-        min_images=min_images,
-        max_images=max_images,
+        audio=audio_dir,
+        min_audio_files=min_audio_files,
+        max_audio_files=max_audio_files,
+        target_speakers=target_speakers,
         output=output,
-        verbose=verbose,
     ))
 
 

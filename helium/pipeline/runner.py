@@ -1,30 +1,48 @@
 """
 Background pipeline runner (used by the FastAPI server).
 
-Executes reconstruction stages sequentially in a daemon thread so the
+Executes pipeline stages sequentially in a daemon thread so the
 API can return the job immediately and the caller polls for progress.
 
 For the CLI, stages are driven directly in helium/cli/main.py so that
 output can be printed to the terminal as each stage completes.
 
-Stage order:  validate → features → matching → sfm → dense → export
+Stage order:  validate → diarize → separate → convert → evaluate → export
 
 Stages that return {"status": "placeholder"} are marked SKIPPED rather
-than COMPLETED so the job is never falsely reported as a real
-reconstruction.  job.real_reconstruction is only True when sfm produces
-sparse.ply + cameras.json.
+than COMPLETED so the job is never falsely reported as running a real
+model-backed pipeline. Placeholder stages may still emit planning
+artifacts so the research workflow stays inspectable.
 """
 
 import threading
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Callable, Dict
 
 from ..models.job import Job, JobStatus, StageStatus
 from ..storage.local import storage
-from .stages import dense, export, features, matching, sfm, validate
+from .stages import convert, diarize, evaluate, export, separate, validate
 
 _PLACEHOLDER = "placeholder"
+_ARTIFACT_FIELD_BY_STAGE = {
+    "validate": "validation_report",
+    "diarize": "diarization_output",
+    "separate": "separation_output",
+    "convert": "conversion_output",
+    "evaluate": "evaluation_report",
+    "export": "export_manifest",
+}
+
+
+def _sync_job_artifacts(job: Job) -> None:
+    for stage_name, field_name in _ARTIFACT_FIELD_BY_STAGE.items():
+        stage = job.stages.get(stage_name)
+        setattr(job.artifacts, field_name, stage.artifacts[0] if stage and stage.artifacts else None)
+
+    job.model_outputs_ready = any(
+        job.stages[name].status == StageStatus.COMPLETED and bool(job.stages[name].artifacts)
+        for name in ("diarize", "separate", "convert")
+    )
 
 
 def _run_stage(
@@ -45,6 +63,8 @@ def _run_stage(
         if isinstance(result, dict) and result.get("status") == _PLACEHOLDER:
             stage.status = StageStatus.SKIPPED
             stage.message = result.get("note", "Not yet implemented.")
+            if "artifacts" in result:
+                stage.artifacts = list(result["artifacts"])
         else:
             stage.status = StageStatus.COMPLETED
             stage.message = str(result)
@@ -52,6 +72,7 @@ def _run_stage(
                 stage.artifacts = list(result["artifacts"])
 
         stage.completed_at = datetime.now(timezone.utc)
+        _sync_job_artifacts(job)
         storage.save_job(job)
         return result
     except Exception as exc:
@@ -80,28 +101,19 @@ def run_pipeline(job_id: str) -> None:
     job.status = JobStatus.RUNNING
     storage.save_job(job)
 
-    images_dir: Path = storage.images_dir(job_id)
-    artifacts_dir: Path = storage.artifacts_dir(job_id)
+    audio_dir = storage.audio_dir(job_id)
+    artifacts_dir = storage.artifacts_dir(job_id)
 
     try:
-        _run_stage(job, "validate", validate.run, images_dir, job.images)
-        _run_stage(job, "features", features.run, images_dir, artifacts_dir, job.images)
-        _run_stage(job, "matching", matching.run, images_dir, artifacts_dir, job.images)
-        _run_stage(job, "sfm", sfm.run, images_dir, artifacts_dir, job.images)
-        _run_stage(job, "dense", dense.run, artifacts_dir, job.images)
-        _run_stage(job, "export", export.run, artifacts_dir)
-
-        sfm_stage = job.stages["sfm"]
-        if sfm_stage.status == StageStatus.COMPLETED and sfm_stage.artifacts:
-            job.real_reconstruction = True
-            for rel in sfm_stage.artifacts:
-                name = Path(rel).name
-                if name == "sparse.ply":
-                    job.artifacts.sparse_ply = rel
-                elif name == "cameras.json":
-                    job.artifacts.cameras_json = rel
+        _run_stage(job, "validate", validate.run, audio_dir, artifacts_dir, job.audio_files)
+        _run_stage(job, "diarize", diarize.run, audio_dir, artifacts_dir, job.audio_files, job.target_speakers)
+        _run_stage(job, "separate", separate.run, audio_dir, artifacts_dir, job.audio_files, job.target_speakers)
+        _run_stage(job, "convert", convert.run, audio_dir, artifacts_dir, job.audio_files, job.target_speakers)
+        _run_stage(job, "evaluate", evaluate.run, artifacts_dir, job.audio_files, job.target_speakers)
+        _run_stage(job, "export", export.run, artifacts_dir, job.id)
 
         job.status = JobStatus.COMPLETED
+        _sync_job_artifacts(job)
         storage.save_job(job)
 
     except Exception:

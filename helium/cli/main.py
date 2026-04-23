@@ -1,10 +1,10 @@
 """
-Helium CLI — local photo-to-3D reconstruction.
+Helium CLI — local-first speech research orchestration.
 
 Commands:
-  helium run <photos>          Run reconstruction on a directory of photos
+  helium run <audio-dir>       Run the audio pipeline on a directory of WAV files
   helium config                Show current configuration
-  helium jobs list             List all past jobs
+  helium jobs list             List past jobs
   helium jobs show <id>        Show full detail for one job
   helium jobs open <id>        Open job output directory in file manager
   helium jobs clean <id>       Delete a job and its files
@@ -21,47 +21,42 @@ from typing import List, Optional
 
 import typer
 from rich.console import Console
-from rich.progress import (
-    BarColumn,
-    MofNCompleteColumn,
-    Progress,
-    SpinnerColumn,
-    TextColumn,
-    TimeElapsedColumn,
-)
 from rich.table import Table
 
 from helium import __version__
 from helium.config import settings
 from helium.models.job import Job, JobStatus, StageStatus
-from helium.pipeline.stages import dense, export, features, matching, sfm, validate
+from helium.pipeline.stages import convert, diarize, evaluate, export, separate, validate
 from helium.storage.local import storage
 
 app = typer.Typer(
     name="helium",
-    help="Local-first photo-to-3D reconstruction.",
+    help="Local-first speech research orchestration.",
     add_completion=False,
     no_args_is_help=True,
 )
-jobs_app = typer.Typer(help="Manage past reconstruction jobs.")
+jobs_app = typer.Typer(help="Manage past Helium jobs.")
 app.add_typer(jobs_app, name="jobs")
 
 console = Console()
 
-_ALLOWED_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif"}
-
+_ALLOWED_SUFFIXES = {".wav", ".wave"}
+_ARTIFACT_FIELD_BY_STAGE = {
+    "validate": "validation_report",
+    "diarize": "diarization_output",
+    "separate": "separation_output",
+    "convert": "conversion_output",
+    "evaluate": "evaluation_report",
+    "export": "export_manifest",
+}
 _STAGE_ICON = {
     StageStatus.COMPLETED: "[green]✓[/green]",
-    StageStatus.SKIPPED:   "[dim]↷[/dim]",
-    StageStatus.FAILED:    "[red]✗[/red]",
-    StageStatus.RUNNING:   "[yellow]…[/yellow]",
-    StageStatus.PENDING:   "[dim]·[/dim]",
+    StageStatus.SKIPPED: "[dim]↷[/dim]",
+    StageStatus.FAILED: "[red]✗[/red]",
+    StageStatus.RUNNING: "[yellow]…[/yellow]",
+    StageStatus.PENDING: "[dim]·[/dim]",
 }
 
-
-# ---------------------------------------------------------------------------
-# Version flag
-# ---------------------------------------------------------------------------
 
 def _version_callback(value: bool) -> None:
     if value:
@@ -73,7 +68,8 @@ def _version_callback(value: bool) -> None:
 def _main_callback(
     version: Optional[bool] = typer.Option(
         None,
-        "--version", "-V",
+        "--version",
+        "-V",
         callback=_version_callback,
         is_eager=True,
         help="Show version and exit.",
@@ -82,449 +78,306 @@ def _main_callback(
     pass
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _collect_images(photos_dir: Path) -> List[Path]:
+def _collect_audio(audio_dir: Path) -> List[Path]:
     return sorted(
-        p for p in photos_dir.iterdir()
+        p for p in audio_dir.iterdir()
         if p.is_file() and p.suffix.lower() in _ALLOWED_SUFFIXES
     )
 
 
-def _copy_images(src_paths: List[Path], images_dir: Path) -> List[str]:
+def _copy_audio(src_paths: List[Path], audio_dir: Path) -> List[str]:
     saved = []
     for idx, src in enumerate(src_paths):
-        dest_name = f"img_{idx:03d}{src.suffix.lower()}"
-        shutil.copy2(src, images_dir / dest_name)
+        dest_name = f"clip_{idx:03d}{src.suffix.lower()}"
+        shutil.copy2(src, audio_dir / dest_name)
         saved.append(dest_name)
     return saved
 
 
-def _summarize(stage_name: str, result: dict) -> str:
-    """One-line human-readable summary of a stage result dict."""
-    if stage_name == "validate":
-        n = result.get("validated", 0)
-        imgs = result.get("images", [])
-        avg_mb = sum(i.get("size_mb", 0) for i in imgs) / n if n else 0
-        return f"{n} images OK · avg {avg_mb:.1f} MB"
+def _sync_job_artifacts(job: Job) -> None:
+    for stage_name, field_name in _ARTIFACT_FIELD_BY_STAGE.items():
+        stage = job.stages.get(stage_name)
+        setattr(job.artifacts, field_name, stage.artifacts[0] if stage and stage.artifacts else None)
 
-    if stage_name == "features":
-        imgs = result.get("images", [])
-        total_kp = sum(i.get("keypoints", 0) for i in imgs)
-        avg_kp = total_kp // len(imgs) if imgs else 0
-        return f"avg {avg_kp:,} keypoints/image"
-
-    if stage_name == "matching":
-        pairs = result.get("pairs_processed", 0)
-        avg = result.get("avg_good_per_pair", 0)
-        return f"{pairs} pairs · avg {avg:.0f} good matches"
-
-    if stage_name == "sfm":
-        n_reg = result.get("num_images_registered", "?")
-        n_tot = result.get("num_images_total", "?")
-        pts = result.get("num_points3d", 0)
-        return f"{n_reg}/{n_tot} images · {pts:,} 3D points"
-
-    return ""
-
-
-def _print_verbose(stage_name: str, result: dict) -> None:
-    """Print a per-item detail table for stages that produce per-item data."""
-    if stage_name == "validate":
-        imgs = result.get("images", [])
-        if not imgs:
-            return
-        t = Table(box=None, padding=(0, 3), show_header=True, header_style="dim")
-        t.add_column("FILE", style="dim")
-        t.add_column("W", justify="right")
-        t.add_column("H", justify="right")
-        t.add_column("SIZE", justify="right")
-        for img in imgs:
-            t.add_row(
-                img["filename"],
-                str(img["width"]),
-                str(img["height"]),
-                f"{img['size_mb']:.2f} MB",
-            )
-        console.print(t)
-
-    elif stage_name == "features":
-        imgs = result.get("images", [])
-        if not imgs:
-            return
-        t = Table(box=None, padding=(0, 3), show_header=True, header_style="dim")
-        t.add_column("FILE", style="dim")
-        t.add_column("KEYPOINTS", justify="right")
-        for img in imgs:
-            kp = img["keypoints"]
-            bar = "█" * min(20, kp // 100)
-            t.add_row(img["filename"], f"{kp:,}  [dim]{bar}[/dim]")
-        console.print(t)
-
-
-def _make_progress_bar(description: str, total: int) -> Progress:
-    return Progress(
-        SpinnerColumn(),
-        TextColumn(f"  [dim]{description:<12}[/dim]"),
-        BarColumn(bar_width=24),
-        MofNCompleteColumn(),
-        TimeElapsedColumn(),
-        console=console,
-        transient=True,
+    job.model_outputs_ready = any(
+        job.stages[name].status == StageStatus.COMPLETED and bool(job.stages[name].artifacts)
+        for name in ("diarize", "separate", "convert")
     )
 
 
-def _run_stage(
-    job: Job,
-    stage_name: str,
-    fn,
-    *args,
-    verbose: bool = False,
-    progress_total: Optional[int] = None,
-) -> Optional[dict]:
-    """
-    Run one pipeline stage.
-
-    If progress_total is set, fn must accept a progress_callback keyword arg
-    and a rich progress bar is shown. Otherwise a spinner is used.
-    Returns the result dict, or None if the stage failed.
-    """
-    t0 = time.monotonic()
-    caught_exc: Optional[Exception] = None
-    result: Optional[dict] = None
-
-    if progress_total is not None:
-        with _make_progress_bar(stage_name, progress_total) as prog:
-            task = prog.add_task("", total=progress_total)
-
-            def _cb(*_args):
-                prog.advance(task)
-
-            try:
-                result = fn(*args, progress_callback=_cb)
-            except Exception as exc:
-                caught_exc = exc
-    else:
-        with console.status(f"  [dim]{stage_name}[/dim]", spinner="dots"):
-            try:
-                result = fn(*args)
-            except Exception as exc:
-                caught_exc = exc
-
-    elapsed = time.monotonic() - t0
-
-    if caught_exc is not None:
-        console.print(
-            f"  [red]✗[/red]  {stage_name:<12}[dim]{elapsed:.1f}s[/dim]  [red]{caught_exc}[/red]"
+def _summarize(stage_name: str, result: dict) -> str:
+    if stage_name == "validate":
+        return (
+            f"{result.get('validated', 0)} clip(s) · "
+            f"{result.get('total_duration_seconds', 0):.1f}s"
         )
-        job.stages[stage_name].status = StageStatus.FAILED
-        job.stages[stage_name].message = str(caught_exc)
-        job.status = JobStatus.FAILED
-        job.error = f"Stage '{stage_name}' failed: {caught_exc}"
-        storage.save_job(job)
-        return None
-
-    if isinstance(result, dict) and result.get("status") == "placeholder":
-        note = result.get("note", "not yet implemented")
-        short = note.split(".")[0] if "." in note else note
-        console.print(f"  [dim]↷  {stage_name:<12}skipped — {short}[/dim]")
-        job.stages[stage_name].status = StageStatus.SKIPPED
-        job.stages[stage_name].message = note
-    else:
-        summary = _summarize(stage_name, result) if isinstance(result, dict) else ""
-        console.print(
-            f"  [green]✓[/green]  {stage_name:<12}[dim]{elapsed:.1f}s[/dim]  {summary}"
+    if stage_name == "evaluate":
+        return (
+            f"{len(result.get('metrics_planned', []))} metric(s) · "
+            f"{result.get('dataset_count', 0)} dataset(s)"
         )
-        job.stages[stage_name].status = StageStatus.COMPLETED
-        job.stages[stage_name].message = str(result)
-        if isinstance(result, dict) and "artifacts" in result:
-            job.stages[stage_name].artifacts = list(result["artifacts"])
-        if verbose and isinstance(result, dict):
-            _print_verbose(stage_name, result)
+    if stage_name == "export":
+        return f"{result.get('artifact_count', 0)} artifact(s)"
+    return ""
 
+
+def _run_stage(job: Job, stage_name: str, fn, *args) -> Optional[dict]:
+    started = time.monotonic()
+    stage = job.stages[stage_name]
+    stage.status = StageStatus.RUNNING
+    stage.started_at = datetime.now(timezone.utc)
     storage.save_job(job)
-    return result
 
+    with console.status(f"  [dim]{stage_name}[/dim]", spinner="dots"):
+        try:
+            result = fn(*args)
+        except Exception as exc:
+            stage.status = StageStatus.FAILED
+            stage.completed_at = datetime.now(timezone.utc)
+            stage.message = str(exc)
+            job.status = JobStatus.FAILED
+            job.error = f"Stage '{stage_name}' failed: {exc}"
+            storage.save_job(job)
+            console.print(
+                f"  [red]✗[/red]  {stage_name:<10}[dim]{time.monotonic() - started:.1f}s[/dim]  "
+                f"[red]{exc}[/red]"
+            )
+            return None
 
-# ---------------------------------------------------------------------------
-# helium run
-# ---------------------------------------------------------------------------
+    elapsed = time.monotonic() - started
+    if isinstance(result, dict) and result.get("status") == "placeholder":
+        stage.status = StageStatus.SKIPPED
+        stage.message = result.get("note", "Not yet implemented.")
+        if "artifacts" in result:
+            stage.artifacts = list(result["artifacts"])
+        short = stage.message.split(".")[0]
+        console.print(f"  [dim]↷  {stage_name:<10}{elapsed:.1f}s  {short}[/dim]")
+    else:
+        stage.status = StageStatus.COMPLETED
+        stage.message = str(result)
+        if isinstance(result, dict) and "artifacts" in result:
+            stage.artifacts = list(result["artifacts"])
+        console.print(
+            f"  [green]✓[/green]  {stage_name:<10}[dim]{elapsed:.1f}s[/dim]  "
+            f"{_summarize(stage_name, result) if isinstance(result, dict) else ''}"
+        )
+
+    stage.completed_at = datetime.now(timezone.utc)
+    _sync_job_artifacts(job)
+    storage.save_job(job)
+    return result if isinstance(result, dict) else None
+
 
 @app.command()
 def run(
-    photos: Path = typer.Argument(
+    audio: Path = typer.Argument(
         ...,
-        help="Directory containing photos of the object.",
+        help="Directory containing WAV files.",
         exists=True,
         file_okay=False,
         dir_okay=True,
         readable=True,
     ),
-    min_images: int = typer.Option(
-        settings.min_images,
-        "--min-images",
-        help="Minimum number of images required.",
+    min_audio_files: int = typer.Option(
+        settings.min_audio_files,
+        "--min-audio-files",
+        help="Minimum number of audio files required.",
     ),
-    max_images: int = typer.Option(
-        settings.max_images,
-        "--max-images",
-        help="Maximum number of images allowed.",
+    max_audio_files: int = typer.Option(
+        settings.max_audio_files,
+        "--max-audio-files",
+        help="Maximum number of audio files allowed.",
+    ),
+    target_speakers: int = typer.Option(
+        settings.target_speakers,
+        "--target-speakers",
+        help="Expected number of speakers in the mixture.",
     ),
     output: Optional[Path] = typer.Option(
         None,
-        "--output", "-o",
+        "--output",
+        "-o",
         help="Copy artifacts to this directory when done.",
-    ),
-    verbose: bool = typer.Option(
-        False,
-        "--verbose", "-v",
-        help="Show per-image/per-pair detail after each completed stage.",
     ),
 ) -> None:
     """
-    Run photo-to-3D reconstruction on a directory of photos.
-
-    Output is saved under the Helium data directory
-    (default: ~/.helium/jobs/<job-id>/).
-    Override the data root with HELIUM_DATA_DIR, or use --output to copy
-    finished artifacts to a specific path.
+    Run the speech research pipeline on a directory of WAV files.
     """
     console.print(f"\n[bold]Helium[/bold] [dim]v{__version__}[/dim]\n")
 
-    # --- Collect images ---
-    image_paths = _collect_images(photos)
-
-    if len(image_paths) < min_images:
+    audio_paths = _collect_audio(audio)
+    if len(audio_paths) < min_audio_files:
         console.print(
-            f"[red]Error:[/red] found {len(image_paths)} image(s) in [bold]{photos}[/bold], "
-            f"need at least {min_images}."
+            f"[red]Error:[/red] found {len(audio_paths)} audio file(s) in [bold]{audio}[/bold], "
+            f"need at least {min_audio_files}."
+        )
+        raise typer.Exit(1)
+    if len(audio_paths) > max_audio_files:
+        console.print(
+            f"[red]Error:[/red] found {len(audio_paths)} audio file(s), "
+            f"maximum is {max_audio_files}."
         )
         raise typer.Exit(1)
 
-    if len(image_paths) > max_images:
-        console.print(
-            f"[red]Error:[/red] found {len(image_paths)} images, "
-            f"maximum is {max_images}. Remove some photos and try again."
-        )
-        raise typer.Exit(1)
-
-    # --- Create job ---
-    job = Job()
+    job = Job(target_speakers=target_speakers)
     storage.create_job_dirs(job.id)
-    job.images = _copy_images(image_paths, storage.images_dir(job.id))
-    job.image_count = len(job.images)
+    job.audio_files = _copy_audio(audio_paths, storage.audio_dir(job.id))
+    job.audio_count = len(job.audio_files)
     job.status = JobStatus.RUNNING
     storage.save_job(job)
 
     console.print(
-        f"  [dim]{job.image_count} photos[/dim]  ·  "
+        f"  [dim]{job.audio_count} clip(s)[/dim]  ·  "
+        f"[dim]{target_speakers} target speaker(s)[/dim]  ·  "
         f"[dim]job {job.id[:8]}…[/dim]\n"
     )
 
-    # --- Run pipeline ---
-    images_dir = storage.images_dir(job.id)
+    audio_dir = storage.audio_dir(job.id)
     artifacts_dir = storage.artifacts_dir(job.id)
-    wall_start = time.monotonic()
-
-    n = len(job.images)
-    n_pairs = n * (n - 1) // 2
-
     stages = [
-        ("validate", validate.run,  None,     images_dir, job.images),
-        ("features", features.run,  n,        images_dir, artifacts_dir, job.images),
-        ("matching", matching.run,  n_pairs,  images_dir, artifacts_dir, job.images),
-        ("sfm",      sfm.run,       None,     images_dir, artifacts_dir, job.images),
-        ("dense",    dense.run,     None,     artifacts_dir, job.images),
-        ("export",   export.run,    None,     artifacts_dir),
+        ("validate", validate.run, audio_dir, artifacts_dir, job.audio_files),
+        ("diarize", diarize.run, audio_dir, artifacts_dir, job.audio_files, job.target_speakers),
+        ("separate", separate.run, audio_dir, artifacts_dir, job.audio_files, job.target_speakers),
+        ("convert", convert.run, audio_dir, artifacts_dir, job.audio_files, job.target_speakers),
+        ("evaluate", evaluate.run, artifacts_dir, job.audio_files, job.target_speakers),
+        ("export", export.run, artifacts_dir, job.id),
     ]
 
-    for stage_name, fn, prog_total, *args in stages:
-        result = _run_stage(
-            job, stage_name, fn, *args,
-            verbose=verbose,
-            progress_total=prog_total,
-        )
-
+    started = time.monotonic()
+    for stage_name, fn, *args in stages:
+        _run_stage(job, stage_name, fn, *args)
         if job.status == JobStatus.FAILED:
-            stage_names = list(job.stages.keys())
-            idx = stage_names.index(stage_name) + 1
-            for name in stage_names[idx:]:
-                job.stages[name].status = StageStatus.SKIPPED
+            for name, stage in job.stages.items():
+                if stage.status == StageStatus.PENDING:
+                    stage.status = StageStatus.SKIPPED
             storage.save_job(job)
             break
 
-        if stage_name == "sfm" and result and "artifacts" in result:
-            job.real_reconstruction = True
-            for rel in result["artifacts"]:
-                name = Path(rel).name
-                if name == "sparse.ply":
-                    job.artifacts.sparse_ply = rel
-                elif name == "cameras.json":
-                    job.artifacts.cameras_json = rel
-            storage.save_job(job)
-
-    # --- Final status ---
-    elapsed = time.monotonic() - wall_start
-
     if job.status != JobStatus.FAILED:
         job.status = JobStatus.COMPLETED
+        _sync_job_artifacts(job)
         storage.save_job(job)
 
-    job_dir = storage.job_dir(job.id)
     console.print()
-
+    elapsed = time.monotonic() - started
     if job.status == JobStatus.COMPLETED:
         console.print(f"  [green]Done[/green] in {elapsed:.1f}s")
     else:
         console.print(f"  [red]Failed[/red] after {elapsed:.1f}s  — {job.error}")
 
+    job_dir = storage.job_dir(job.id)
     console.print(f"  Output: [bold]{job_dir}[/bold]")
 
     if output is not None and job.status == JobStatus.COMPLETED:
-        artifacts_src = storage.artifacts_dir(job.id)
         output.mkdir(parents=True, exist_ok=True)
-        if any(artifacts_src.iterdir()):
-            shutil.copytree(str(artifacts_src), str(output), dirs_exist_ok=True)
-            console.print(f"  Artifacts copied to: [bold]{output}[/bold]")
-        else:
-            console.print("  [dim]No artifacts to copy (all pipeline stages were placeholders).[/dim]")
+        shutil.copytree(str(storage.artifacts_dir(job.id)), str(output), dirs_exist_ok=True)
+        console.print(f"  Artifacts copied to: [bold]{output}[/bold]")
 
-    console.print(
-        f"\n  [dim]helium jobs show {job.id[:8]} — full detail[/dim]\n"
-    )
+    console.print(f"\n  [dim]helium jobs show {job.id[:8]} — full detail[/dim]\n")
 
-
-# ---------------------------------------------------------------------------
-# helium shell  (+ helium explode as a hidden alias)
-# ---------------------------------------------------------------------------
 
 @app.command("shell")
 def shell_cmd() -> None:
-    """Start an interactive Helium session with tab completion and history."""
     from helium.cli.shell import run_shell
+
     run_shell()
 
 
 @app.command("explode", hidden=True)
 def explode_cmd() -> None:
-    """Start an interactive Helium session. (alias for 'shell')"""
     from helium.cli.shell import run_shell
+
     run_shell()
 
 
-# ---------------------------------------------------------------------------
-# helium config
-# ---------------------------------------------------------------------------
-
 @app.command("config")
 def config_cmd() -> None:
-    """Show current Helium configuration and the environment variables that control each setting."""
     rows = [
-        ("data_dir",           str(settings.data_dir),          "HELIUM_DATA_DIR"),
-        ("min_images",         str(settings.min_images),         "HELIUM_MIN_IMAGES"),
-        ("max_images",         str(settings.max_images),         "HELIUM_MAX_IMAGES"),
-        ("max_image_size_mb",  str(settings.max_image_size_mb),  "HELIUM_MAX_IMAGE_SIZE_MB"),
+        ("data_dir", str(settings.data_dir), "HELIUM_DATA_DIR"),
+        ("min_audio_files", str(settings.min_audio_files), "HELIUM_MIN_AUDIO_FILES"),
+        ("max_audio_files", str(settings.max_audio_files), "HELIUM_MAX_AUDIO_FILES"),
+        ("max_audio_size_mb", str(settings.max_audio_size_mb), "HELIUM_MAX_AUDIO_SIZE_MB"),
+        ("target_speakers", str(settings.target_speakers), "HELIUM_TARGET_SPEAKERS"),
+        ("diarization_backend", settings.diarization_backend, "HELIUM_DIARIZATION_BACKEND"),
+        ("separation_backend", settings.separation_backend, "HELIUM_SEPARATION_BACKEND"),
+        ("conversion_backend", settings.conversion_backend, "HELIUM_CONVERSION_BACKEND"),
     ]
 
-    t = Table(box=None, show_header=True, header_style="bold", padding=(0, 2))
-    t.add_column("SETTING")
-    t.add_column("VALUE")
-    t.add_column("ENV VAR", style="dim")
-    t.add_column("SOURCE", style="dim")
+    table = Table(box=None, show_header=True, header_style="bold", padding=(0, 2))
+    table.add_column("SETTING")
+    table.add_column("VALUE")
+    table.add_column("ENV VAR", style="dim")
+    table.add_column("SOURCE", style="dim")
 
     for name, value, env_var in rows:
         from_env = env_var in os.environ
-        source = "env" if from_env else "default"
-        value_styled = f"[bold]{value}[/bold]" if from_env else value
-        t.add_row(name, value_styled, env_var, source)
+        table.add_row(name, f"[bold]{value}[/bold]" if from_env else value, env_var, "env" if from_env else "default")
 
     console.print()
-    console.print(t)
+    console.print(table)
     console.print()
 
-
-# ---------------------------------------------------------------------------
-# helium jobs list
-# ---------------------------------------------------------------------------
 
 @jobs_app.command("list")
 def jobs_list() -> None:
-    """List all reconstruction jobs, newest first."""
-    all_jobs = []
+    jobs = []
     for job_id in storage.list_job_ids():
         job = storage.load_job(job_id)
         if job is not None:
-            all_jobs.append(job)
+            jobs.append(job)
 
-    all_jobs.sort(key=lambda j: j.created_at, reverse=True)
-
-    if not all_jobs:
-        console.print(
-            "[dim]No jobs found. Run [bold]helium run <photos>[/bold] to start one.[/dim]"
-        )
+    jobs.sort(key=lambda item: item.created_at, reverse=True)
+    if not jobs:
+        console.print("[dim]No jobs found. Run [bold]helium run <audio-dir>[/bold] to start one.[/dim]")
         return
 
-    t = Table(show_header=True, header_style="bold", box=None, padding=(0, 2))
-    t.add_column("ID", style="dim", no_wrap=True)
-    t.add_column("STATUS")
-    t.add_column("IMAGES", justify="right")
-    t.add_column("REAL RECON", justify="center")
-    t.add_column("CREATED")
+    table = Table(show_header=True, header_style="bold", box=None, padding=(0, 2))
+    table.add_column("ID", style="dim", no_wrap=True)
+    table.add_column("STATUS")
+    table.add_column("AUDIO", justify="right")
+    table.add_column("MODEL OUT", justify="center")
+    table.add_column("CREATED")
 
-    _status_style = {
+    status_style = {
         JobStatus.COMPLETED: "green",
-        JobStatus.FAILED:    "red",
-        JobStatus.RUNNING:   "yellow",
-        JobStatus.PENDING:   "dim",
+        JobStatus.FAILED: "red",
+        JobStatus.RUNNING: "yellow",
+        JobStatus.PENDING: "dim",
     }
 
-    for job in all_jobs:
-        style = _status_style.get(job.status, "")
-        age = _human_age(job.created_at)
-        real = "✓" if job.real_reconstruction else "—"
-        t.add_row(
+    for job in jobs:
+        table.add_row(
             job.id[:12] + "…",
-            f"[{style}]{job.status.value}[/{style}]",
-            str(job.image_count),
-            real,
-            age,
+            f"[{status_style.get(job.status, '')}]{job.status.value}[/{status_style.get(job.status, '')}]",
+            str(job.audio_count),
+            "✓" if job.model_outputs_ready else "—",
+            _human_age(job.created_at),
         )
 
     console.print()
-    console.print(t)
+    console.print(table)
     console.print()
 
-
-# ---------------------------------------------------------------------------
-# helium jobs show <id>
-# ---------------------------------------------------------------------------
 
 @jobs_app.command("show")
-def jobs_show(
-    job_id: str = typer.Argument(..., help="Job ID or prefix."),
-) -> None:
-    """Show full status and per-stage detail for a job."""
+def jobs_show(job_id: str = typer.Argument(..., help="Job ID or prefix.")) -> None:
     job = _find_job(job_id)
-
-    _status_color = {
+    status_color = {
         JobStatus.COMPLETED: "green",
-        JobStatus.FAILED:    "red",
-        JobStatus.RUNNING:   "yellow",
-        JobStatus.PENDING:   "dim",
-    }
-    color = _status_color.get(job.status, "")
+        JobStatus.FAILED: "red",
+        JobStatus.RUNNING: "yellow",
+        JobStatus.PENDING: "dim",
+    }.get(job.status, "dim")
 
     console.print()
-    console.print(f"  [bold]Job[/bold]     {job.id}")
-    console.print(f"  [bold]Status[/bold]  [{color}]{job.status.value}[/{color}]")
-    console.print(f"  [bold]Images[/bold]  {job.image_count}")
-    console.print(f"  [bold]Created[/bold] {job.created_at.strftime('%Y-%m-%d %H:%M:%S UTC')}")
-    if job.real_reconstruction:
-        console.print("  [bold]SfM[/bold]     [green]real reconstruction[/green]")
+    console.print(f"  [bold]Job[/bold]       {job.id}")
+    console.print(f"  [bold]Status[/bold]    [{status_color}]{job.status.value}[/{status_color}]")
+    console.print(f"  [bold]Audio[/bold]     {job.audio_count}")
+    console.print(f"  [bold]Speakers[/bold]  {job.target_speakers}")
+    console.print(f"  [bold]Created[/bold]   {job.created_at.strftime('%Y-%m-%d %H:%M:%S UTC')}")
+    console.print(f"  [bold]Models[/bold]    {'ready' if job.model_outputs_ready else 'scaffold only'}")
     if job.error:
-        console.print(f"  [bold]Error[/bold]   [red]{job.error}[/red]")
+        console.print(f"  [bold]Error[/bold]     [red]{job.error}[/red]")
 
     console.print()
     console.print("  [bold]Stages[/bold]")
@@ -532,25 +385,15 @@ def jobs_show(
         icon = _STAGE_ICON.get(stage.status, "·")
         duration = ""
         if stage.started_at and stage.completed_at:
-            secs = (stage.completed_at - stage.started_at).total_seconds()
-            duration = f"[dim]{secs:.1f}s[/dim]  "
-        artifact_note = (
-            f"[dim]{len(stage.artifacts)} artifact(s)[/dim]" if stage.artifacts else ""
-        )
-        console.print(f"    {icon}  {name:<12}{duration}{artifact_note}")
+            duration = f"[dim]{(stage.completed_at - stage.started_at).total_seconds():.1f}s[/dim]  "
+        artifact_note = f"[dim]{len(stage.artifacts)} artifact(s)[/dim]" if stage.artifacts else ""
+        console.print(f"    {icon}  {name:<10}{duration}{artifact_note}")
 
-    console.print(f"\n  [bold]Output[/bold]  {storage.job_dir(job.id)}\n")
+    console.print(f"\n  [bold]Output[/bold]    {storage.job_dir(job.id)}\n")
 
-
-# ---------------------------------------------------------------------------
-# helium jobs open <id>
-# ---------------------------------------------------------------------------
 
 @jobs_app.command("open")
-def jobs_open(
-    job_id: str = typer.Argument(..., help="Job ID or prefix."),
-) -> None:
-    """Open the job output directory in the system file manager."""
+def jobs_open(job_id: str = typer.Argument(..., help="Job ID or prefix.")) -> None:
     job = _find_job(job_id)
     job_dir = storage.job_dir(job.id)
 
@@ -564,49 +407,31 @@ def jobs_open(
     console.print(f"  Opened [bold]{job_dir}[/bold]")
 
 
-# ---------------------------------------------------------------------------
-# helium jobs clean <id>
-# ---------------------------------------------------------------------------
-
 @jobs_app.command("clean")
 def jobs_clean(
     job_id: str = typer.Argument(..., help="Job ID or prefix."),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt."),
 ) -> None:
-    """Delete a job and all its files."""
     job = _find_job(job_id)
-
     if not yes:
-        typer.confirm(
-            f"Delete job {job.id} and all its files?",
-            abort=True,
-        )
-
+        typer.confirm(f"Delete job {job.id} and all its files?", abort=True)
     storage.delete_job(job.id)
     console.print(f"[green]Deleted[/green] job {job.id[:12]}…")
 
 
-# ---------------------------------------------------------------------------
-# Internal utilities
-# ---------------------------------------------------------------------------
-
 def _find_job(prefix: str) -> Job:
-    """Find a job by full ID or unambiguous prefix. Exits with error if not found."""
     job = storage.load_job(prefix)
     if job is not None:
         return job
 
-    matches = [jid for jid in storage.list_job_ids() if jid.startswith(prefix)]
+    matches = [job_id for job_id in storage.list_job_ids() if job_id.startswith(prefix)]
     if len(matches) == 1:
-        job = storage.load_job(matches[0])
-        if job is not None:
-            return job
+        match = storage.load_job(matches[0])
+        if match is not None:
+            return match
 
     if len(matches) > 1:
-        console.print(
-            f"[red]Ambiguous prefix '{prefix}' matches {len(matches)} jobs. "
-            "Use more characters.[/red]"
-        )
+        console.print(f"[red]Ambiguous prefix '{prefix}' matches {len(matches)} jobs.[/red]")
     else:
         console.print(f"[red]Job '{prefix}' not found.[/red]")
     raise typer.Exit(1)

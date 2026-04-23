@@ -1,48 +1,34 @@
-"""
-Stage: export (Mesh Extraction + STL/OBJ Export)
-
-TODO: This is a placeholder. Implement one of the following:
-
-Option A — Open3D Poisson surface reconstruction:
-    pcd = o3d.io.read_point_cloud(str(dense_ply))
-    pcd.estimate_normals()
-    mesh, _ = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(pcd, depth=9)
-    o3d.io.write_triangle_mesh(str(mesh_dir / "mesh.obj"), mesh)
-
-Option B — trimesh for repair + export:
-    import trimesh
-    mesh = trimesh.load(str(mesh_obj))
-    mesh.fill_holes()
-    mesh.export(str(mesh_dir / "mesh.stl"))
-
-Expected inputs:
-    artifacts/point_cloud/dense.ply
-
-Expected outputs:
-    artifacts/mesh/mesh.obj
-    artifacts/mesh/mesh.stl
-"""
-
 import json
 from pathlib import Path
 from typing import Any, Dict
 
 
-def run(artifacts_dir: Path) -> Dict[str, Any]:
-    mesh_dir = artifacts_dir / "mesh"
-    mesh_dir.mkdir(parents=True, exist_ok=True)
+def run(artifacts_dir: Path, job_id: str) -> Dict[str, Any]:
+    export_dir = artifacts_dir / "export"
+    export_dir.mkdir(parents=True, exist_ok=True)
 
-    status = {
-        "status": "placeholder",
-        "note": (
-            "Mesh export not yet implemented. "
-            "Connect Open3D Poisson reconstruction + trimesh export here."
-        ),
-        "expected_inputs": ["dense.ply"],
-        "expected_outputs": ["mesh.obj", "mesh.stl"],
+    artifact_files = [
+        str(path.relative_to(artifacts_dir))
+        for path in sorted(artifacts_dir.rglob("*"))
+        if path.is_file() and path.parent != export_dir
+    ]
+
+    manifest = {
+        "job_id": job_id,
+        "artifact_count": len(artifact_files),
+        "artifacts": artifact_files,
+        "next_steps": [
+            "Integrate pyannote diarization outputs.",
+            "Integrate local speech separation to emit isolated stems.",
+            "Integrate style-preserving voice conversion and compare against baselines.",
+        ],
     }
 
-    with open(mesh_dir / "export_status.json", "w") as fh:
-        json.dump(status, fh, indent=2)
+    manifest_path = export_dir / "run_manifest.json"
+    with open(manifest_path, "w") as fh:
+        json.dump(manifest, fh, indent=2)
 
-    return status
+    return {
+        "artifact_count": len(artifact_files),
+        "artifacts": [str(manifest_path.relative_to(artifacts_dir))],
+    }

@@ -1,39 +1,40 @@
 """
 Integration tests for the upload and job status endpoints.
-
-These tests use an in-process TestClient and a temp directory for storage
-so they run without Docker and leave no residue.
 """
 
 import io
-import os
-from unittest.mock import patch
+import math
+import wave
 
-import cv2
-import numpy as np
-import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.services import upload_service
 
 client = TestClient(app)
 
 
-def _make_jpeg(width: int = 200, height: int = 200) -> bytes:
-    """Create a tiny valid JPEG in memory."""
-    img = np.random.randint(0, 256, (height, width, 3), dtype=np.uint8)
-    _, buf = cv2.imencode(".jpg", img)
-    return buf.tobytes()
+def _make_wav_bytes(duration_seconds: float = 0.25, sample_rate: int = 16000) -> bytes:
+    frames = int(duration_seconds * sample_rate)
+    payload = io.BytesIO()
+    with wave.open(payload, "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(sample_rate)
+        samples = bytearray()
+        for idx in range(frames):
+            value = int(16000 * math.sin(2 * math.pi * 440 * (idx / sample_rate)))
+            samples.extend(value.to_bytes(2, byteorder="little", signed=True))
+        wav_file.writeframes(bytes(samples))
+    return payload.getvalue()
 
 
-def _image_files(n: int) -> list:
+def _audio_files(n: int) -> list:
     return [
-        ("files", (f"photo_{i:02d}.jpg", io.BytesIO(_make_jpeg()), "image/jpeg"))
+        ("files", (f"clip_{i:02d}.wav", io.BytesIO(_make_wav_bytes()), "audio/wav"))
         for i in range(n)
     ]
 
-
-# --- health ---
 
 def test_health():
     resp = client.get("/health")
@@ -41,67 +42,64 @@ def test_health():
     assert resp.json()["status"] == "ok"
 
 
-# --- upload ---
-
-def test_upload_too_few_images():
-    resp = client.post("/upload", files=_image_files(1))
+def test_upload_too_few_audio_files():
+    resp = client.post("/upload", files=_audio_files(1))
     assert resp.status_code == 400
-    assert "minimum" in resp.json()["detail"].lower() or "least" in resp.json()["detail"].lower()
+    assert "at least" in resp.json()["detail"].lower()
 
 
-def test_upload_too_many_images():
-    with patch("app.config.settings") as mock_settings:
-        mock_settings.min_images = 2
-        mock_settings.max_images = 3
-        mock_settings.max_image_size_mb = 20
-    resp = client.post("/upload", files=_image_files(25))
+def test_upload_too_many_audio_files():
+    original_min = upload_service.settings.min_audio_files
+    original_max = upload_service.settings.max_audio_files
+    original_size = upload_service.settings.max_audio_size_mb
+    upload_service.settings.min_audio_files = 1
+    upload_service.settings.max_audio_files = 3
+    upload_service.settings.max_audio_size_mb = 100
+    resp = client.post("/upload", files=_audio_files(5))
+    upload_service.settings.min_audio_files = original_min
+    upload_service.settings.max_audio_files = original_max
+    upload_service.settings.max_audio_size_mb = original_size
     assert resp.status_code == 400
 
 
 def test_upload_success():
-    resp = client.post("/upload", files=_image_files(3))
+    resp = client.post("/upload", files=_audio_files(3))
     assert resp.status_code == 201, resp.text
     body = resp.json()
     assert "id" in body
     assert body["status"] == "pending"
-    assert body["image_count"] == 3
-    assert len(body["images"]) == 3
+    assert body["audio_count"] == 3
+    assert len(body["audio_files"]) == 3
 
 
 def test_upload_bad_content_type():
-    files = [("files", ("doc.pdf", io.BytesIO(b"%PDF-1.4"), "application/pdf"))]
+    files = [("files", ("clip.mp3", io.BytesIO(b"not-mp3"), "audio/mpeg"))]
     resp = client.post("/upload", files=files)
     assert resp.status_code == 400
 
-
-# --- jobs ---
 
 def test_get_job_not_found():
     resp = client.get("/jobs/nonexistent-id")
     assert resp.status_code == 404
 
 
-def test_list_jobs_empty():
-    # Uses a fresh tmp dir per test run; may not be empty across tests but should not crash
+def test_list_jobs_returns_array():
     resp = client.get("/jobs/")
     assert resp.status_code == 200
     assert isinstance(resp.json(), list)
 
 
 def test_full_flow():
-    # Upload
-    resp = client.post("/upload", files=_image_files(4))
+    resp = client.post("/upload", files=_audio_files(4))
     assert resp.status_code == 201
     job_id = resp.json()["id"]
 
-    # Immediately readable
     resp2 = client.get(f"/jobs/{job_id}")
     assert resp2.status_code == 200
     body = resp2.json()
     assert body["id"] == job_id
-    assert body["image_count"] == 4
+    assert body["audio_count"] == 4
 
-    # Appears in list
     resp3 = client.get("/jobs/")
-    ids = [j["id"] for j in resp3.json()]
+    ids = [job["id"] for job in resp3.json()]
     assert job_id in ids

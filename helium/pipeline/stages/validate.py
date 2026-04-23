@@ -1,51 +1,78 @@
 """
 Stage: validate
 
-Checks every uploaded image is readable and within acceptable bounds.
-Runs before any compute-heavy steps so we fail fast on bad inputs.
+Validates uploaded WAV files and records lightweight metadata before any
+model-backed processing begins.
 """
 
+import json
+import wave
 from pathlib import Path
 from typing import Any, Dict, List
 
-import cv2
 
-from ...config import settings
-
-
-class ValidationError(Exception):
+class ValidationError(RuntimeError):
     pass
 
 
-def run(images_dir: Path, image_files: List[str]) -> Dict[str, Any]:
-    results = []
+def _inspect_wav(path: Path) -> Dict[str, Any]:
+    try:
+        with wave.open(str(path), "rb") as wav_file:
+            frames = wav_file.getnframes()
+            sample_rate = wav_file.getframerate()
+            channels = wav_file.getnchannels()
+            sample_width = wav_file.getsampwidth()
+    except (wave.Error, EOFError) as exc:
+        raise ValidationError(f"'{path.name}' is not a readable WAV file.") from exc
 
-    for filename in image_files:
-        path = images_dir / filename
+    duration_seconds = frames / float(sample_rate) if sample_rate else 0.0
+    if duration_seconds <= 0:
+        raise ValidationError(f"'{path.name}' is empty.")
 
+    return {
+        "filename": path.name,
+        "sample_rate_hz": sample_rate,
+        "channels": channels,
+        "sample_width_bytes": sample_width,
+        "frames": frames,
+        "duration_seconds": round(duration_seconds, 3),
+        "size_mb": round(path.stat().st_size / (1024 * 1024), 3),
+    }
+
+
+def run(audio_dir: Path, artifacts_dir: Path, audio_files: List[str]) -> Dict[str, Any]:
+    if not audio_files:
+        raise ValidationError("No audio files were provided.")
+
+    manifests_dir = artifacts_dir / "manifests"
+    manifests_dir.mkdir(parents=True, exist_ok=True)
+
+    clips = []
+    for name in audio_files:
+        path = audio_dir / name
         if not path.exists():
-            raise ValidationError(f"Image file missing on disk: {filename}")
+            raise ValidationError(f"Audio file '{name}' is missing.")
+        clips.append(_inspect_wav(path))
 
-        img = cv2.imread(str(path))
-        if img is None:
-            raise ValidationError(
-                f"OpenCV could not decode '{filename}'. "
-                "File may be corrupt or an unsupported format."
-            )
+    total_duration = round(sum(item["duration_seconds"] for item in clips), 3)
+    report = {
+        "validated": len(clips),
+        "total_duration_seconds": total_duration,
+        "clips": clips,
+        "recommended_backends": {
+            "diarization": "pyannote/speaker-diarization",
+            "separation": "speechbrain/sepformer-whamr",
+            "conversion": "RedRepter/seed-vc-api",
+        },
+    }
 
-        h, w = img.shape[:2]
-        if h < 100 or w < 100:
-            raise ValidationError(
-                f"Image '{filename}' is too small ({w}x{h}). Minimum is 100x100 px."
-            )
+    report_path = manifests_dir / "validation_report.json"
+    with open(report_path, "w") as fh:
+        json.dump(report, fh, indent=2)
 
-        size_mb = path.stat().st_size / (1024 * 1024)
-        if size_mb > settings.max_image_size_mb:
-            raise ValidationError(
-                f"Image '{filename}' is {size_mb:.1f} MB, "
-                f"exceeding the {settings.max_image_size_mb} MB limit."
-            )
-
-        results.append({"filename": filename, "width": w, "height": h, "size_mb": round(size_mb, 2)})
-
-    return {"validated": len(results), "images": results}
+    return {
+        "validated": len(clips),
+        "total_duration_seconds": total_duration,
+        "clips": clips,
+        "artifacts": [str(report_path.relative_to(artifacts_dir))],
+    }

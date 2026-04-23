@@ -9,23 +9,23 @@ from ..models.job import Job
 from ..storage.local import storage
 
 _ALLOWED_CONTENT_TYPES = {
-    "image/jpeg",
-    "image/jpg",
-    "image/png",
-    "image/bmp",
-    "image/tiff",
-    "image/tif",
+    "audio/wav",
+    "audio/wave",
+    "audio/x-wav",
+    "application/octet-stream",
 }
 
-_ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif"}
+_ALLOWED_EXTENSIONS = {".wav", ".wave"}
 
 
 def _validate_file_meta(file: UploadFile) -> None:
     if file.content_type and file.content_type not in _ALLOWED_CONTENT_TYPES:
         raise HTTPException(
             status_code=400,
-            detail=f"Unsupported file type '{file.content_type}' for '{file.filename}'. "
-                   f"Accepted: JPEG, PNG, BMP, TIFF.",
+            detail=(
+                f"Unsupported file type '{file.content_type}' for '{file.filename}'. "
+                "Accepted: WAV."
+            ),
         )
     if file.filename:
         ext = Path(file.filename).suffix.lower()
@@ -36,39 +36,47 @@ def _validate_file_meta(file: UploadFile) -> None:
             )
 
 
-def save_images(job: Job, files: List[UploadFile]) -> List[str]:
-    if len(files) < settings.min_images:
+def save_audio(job: Job, files: List[UploadFile]) -> List[str]:
+    if len(files) < settings.min_audio_files:
         raise HTTPException(
             status_code=400,
-            detail=f"At least {settings.min_images} images are required; got {len(files)}.",
+            detail=(
+                f"At least {settings.min_audio_files} audio file(s) are required; "
+                f"got {len(files)}."
+            ),
         )
-    if len(files) > settings.max_images:
+    if len(files) > settings.max_audio_files:
         raise HTTPException(
             status_code=400,
-            detail=f"Maximum {settings.max_images} images allowed; got {len(files)}.",
+            detail=(
+                f"Maximum {settings.max_audio_files} audio file(s) allowed; "
+                f"got {len(files)}."
+            ),
         )
 
     for file in files:
         _validate_file_meta(file)
 
-    images_dir = storage.images_dir(job.id)
+    audio_dir = storage.audio_dir(job.id)
     saved: List[str] = []
 
     for idx, file in enumerate(files):
-        ext = Path(file.filename).suffix.lower() if file.filename else ".jpg"
-        filename = f"img_{idx:03d}{ext}"
-        dest = images_dir / filename
+        ext = Path(file.filename).suffix.lower() if file.filename else ".wav"
+        filename = f"clip_{idx:03d}{ext}"
+        dest = audio_dir / filename
 
         with open(dest, "wb") as out:
             shutil.copyfileobj(file.file, out)
 
         file_size_mb = dest.stat().st_size / (1024 * 1024)
-        if file_size_mb > settings.max_image_size_mb:
+        if file_size_mb > settings.max_audio_size_mb:
             dest.unlink(missing_ok=True)
             raise HTTPException(
                 status_code=400,
-                detail=f"Image '{file.filename}' exceeds {settings.max_image_size_mb} MB limit "
-                       f"({file_size_mb:.1f} MB).",
+                detail=(
+                    f"Audio '{file.filename}' exceeds {settings.max_audio_size_mb} MB limit "
+                    f"({file_size_mb:.1f} MB)."
+                ),
             )
 
         saved.append(filename)

@@ -1,13 +1,18 @@
 """
 Shared pytest configuration.
 
-Sets HELIUM_DATA_DIR and HELIUM_MIN_IMAGES before any app module is
-imported so all tests run against a temp directory and accept 2+ images
-instead of requiring the full 8-image minimum.
+Sets a temp data directory and a small minimum audio file count before the
+app is imported so tests run without touching user state.
 """
 
 import os
+import sys
 import tempfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 os.environ.setdefault("HELIUM_DATA_DIR", tempfile.mkdtemp())
-os.environ.setdefault("HELIUM_MIN_IMAGES", "2")
+os.environ.setdefault("HELIUM_MIN_AUDIO_FILES", "2")

@@ -13,12 +13,14 @@ class LocalStorage:
     """
     All job data lives under:
       {data_dir}/jobs/{job_id}/
-        images/           raw uploaded / copied source images
+        audio/            raw uploaded / copied source audio
         artifacts/
-          features/       keypoints + descriptors per image
-          matches/        pairwise match files
-          point_cloud/    sparse + dense PLY files
-          mesh/           OBJ / STL exports
+          manifests/      validation reports and manifests
+          diarization/    RTTM / JSON speaker turns
+          separation/     isolated sources or source plans
+          conversion/     converted voices or conversion plans
+          evaluation/     metrics and experiment reports
+          export/         release-ready summaries and bundles
         metadata.json     job state (atomic write on every status change)
     """
 
@@ -31,8 +33,8 @@ class LocalStorage:
     def job_dir(self, job_id: str) -> Path:
         return self._jobs_root / job_id
 
-    def images_dir(self, job_id: str) -> Path:
-        return self.job_dir(job_id) / "images"
+    def audio_dir(self, job_id: str) -> Path:
+        return self.job_dir(job_id) / "audio"
 
     def artifacts_dir(self, job_id: str) -> Path:
         return self.job_dir(job_id) / "artifacts"
@@ -44,9 +46,9 @@ class LocalStorage:
 
     def create_job_dirs(self, job_id: str) -> None:
         artifacts = self.artifacts_dir(job_id)
-        for subdir in ("features", "matches", "point_cloud", "mesh"):
+        for subdir in ("manifests", "diarization", "separation", "conversion", "evaluation", "export"):
             (artifacts / subdir).mkdir(parents=True, exist_ok=True)
-        self.images_dir(job_id).mkdir(parents=True, exist_ok=True)
+        self.audio_dir(job_id).mkdir(parents=True, exist_ok=True)
 
     def delete_job(self, job_id: str) -> None:
         job_dir = self.job_dir(job_id)

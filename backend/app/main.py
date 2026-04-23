@@ -6,8 +6,8 @@ from .api.routes import artifacts, jobs, upload
 app = FastAPI(
     title="Helium",
     description=(
-        "Local-first photo-to-3D reconstruction backend. "
-        "Upload 8–20 photos of an object and get a 3D model."
+        "Local-first speech research backend. "
+        "Upload WAV files and orchestrate diarization, separation, voice conversion, and evaluation."
     ),
     version="0.1.0",
 )

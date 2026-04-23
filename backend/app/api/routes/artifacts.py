@@ -20,7 +20,7 @@ def list_artifacts(job_id: str) -> List[Dict[str, Any]]:
 
 @router.get("/{job_id}/artifacts/{file_path:path}")
 def download_artifact(job_id: str, file_path: str) -> FileResponse:
-    """Download a specific artifact (e.g. point_cloud/sparse.ply)."""
+    """Download a specific artifact (for example manifests/validation_report.json)."""
     if job_service.get_job(job_id) is None:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
 
@@ -39,35 +39,37 @@ def download_artifact(job_id: str, file_path: str) -> FileResponse:
 
 @router.get("/{job_id}/summary")
 def job_summary(job_id: str) -> Dict[str, Any]:
-    """Compact reconstruction summary: status, real_reconstruction flag, per-stage artifacts."""
+    """Compact research summary: job status, model readiness, and per-stage artifacts."""
     job = job_service.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
 
-    sfm_stage = job.stages.get("sfm")
-    sfm_info: Dict[str, Any] = {
-        "status": sfm_stage.status if sfm_stage else "unknown",
-        "artifacts": sfm_stage.artifacts if sfm_stage else [],
-        "message": sfm_stage.message if sfm_stage else "",
+    diarize_stage = job.stages.get("diarize")
+    diarize_info: Dict[str, Any] = {
+        "status": diarize_stage.status if diarize_stage else "unknown",
+        "artifacts": diarize_stage.artifacts if diarize_stage else [],
+        "message": diarize_stage.message if diarize_stage else "",
     }
 
     return {
         "job_id": job.id,
         "status": job.status,
-        "real_reconstruction": job.real_reconstruction,
-        "image_count": job.image_count,
+        "model_outputs_ready": job.model_outputs_ready,
+        "audio_count": job.audio_count,
+        "target_speakers": job.target_speakers,
         "created_at": job.created_at.isoformat(),
         "updated_at": job.updated_at.isoformat(),
         "stages": {
             name: {"status": s.status, "artifacts": s.artifacts}
             for name, s in job.stages.items()
         },
-        "sfm": sfm_info,
+        "diarize": diarize_info,
         "artifacts": {
-            "sparse_ply": job.artifacts.sparse_ply,
-            "cameras_json": job.artifacts.cameras_json,
-            "dense_ply": job.artifacts.dense_ply,
-            "mesh_obj": job.artifacts.mesh_obj,
-            "mesh_stl": job.artifacts.mesh_stl,
+            "validation_report": job.artifacts.validation_report,
+            "diarization_output": job.artifacts.diarization_output,
+            "separation_output": job.artifacts.separation_output,
+            "conversion_output": job.artifacts.conversion_output,
+            "evaluation_report": job.artifacts.evaluation_report,
+            "export_manifest": job.artifacts.export_manifest,
         },
     }
