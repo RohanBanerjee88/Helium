@@ -5,17 +5,16 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "helium-speech"
 version = "0.1.0"
-description = "Local-first speech research orchestration for diarization, separation, and voice conversion"
+description = "Local-first speech research scaffold for diarization, separation, and voice conversion"
 readme = "README.md"
 license = { text = "Apache-2.0" }
 requires-python = ">=3.10"
 dependencies = [
-    "typer>=0.12.0",
-    "rich>=13.0.0",
     "numpy>=1.26.0",
     "pydantic>=2.6.0",
     "pydantic-settings>=2.2.0",
-    "prompt_toolkit>=3.0.0",
+    "typer>=0.12.0",
+    "rich>=13.0.0",
 ]
 
 [project.optional-dependencies]
@@ -28,18 +27,9 @@ metrics = [
     "resemblyzer>=0.1.4",       # speaker similarity via d-vectors
     "faster-whisper>=1.0.0",    # WER via ASR (lighter than openai-whisper)
 ]
-server = [
-    "fastapi>=0.110.0",
-    "uvicorn[standard]>=0.29.0",
-    "python-multipart>=0.0.9",
-]
 dev = [
     "pytest>=8.1.0",
-    "httpx>=0.27.0",
 ]
-
-[project.scripts]
-helium = "helium.cli.main:app"
 
 [tool.setuptools.packages.find]
 where = ["."]
