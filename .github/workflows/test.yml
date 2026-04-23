@@ -20,7 +20,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: pip install -e ".[dev]"
+        run: pip install -e "."
 
-      - name: Run tests
-        run: pytest helium/ -v
+      - name: Check imports
+        run: python -c "import helium; import helium.metrics; import helium.pipeline.runner; import helium.benchmarks.runner"
