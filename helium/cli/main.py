@@ -24,6 +24,7 @@ from rich.console import Console
 from rich.table import Table
 
 from helium import __version__
+from helium.benchmarks.cli import app as _benchmark_app
 from helium.config import settings
 from helium.models.job import Job, JobStatus, StageStatus
 from helium.pipeline.stages import convert, diarize, evaluate, export, separate, validate
@@ -37,6 +38,7 @@ app = typer.Typer(
 )
 jobs_app = typer.Typer(help="Manage past Helium jobs.")
 app.add_typer(jobs_app, name="jobs")
+app.add_typer(_benchmark_app, name="benchmark")
 
 console = Console()
 
@@ -112,10 +114,9 @@ def _summarize(stage_name: str, result: dict) -> str:
             f"{result.get('total_duration_seconds', 0):.1f}s"
         )
     if stage_name == "evaluate":
-        return (
-            f"{len(result.get('metrics_planned', []))} metric(s) · "
-            f"{result.get('dataset_count', 0)} dataset(s)"
-        )
+        computed = result.get("metrics_computed", 0)
+        planned = len(result.get("metrics_planned", []))
+        return f"{computed}/{planned} metric(s) computed"
     if stage_name == "export":
         return f"{result.get('artifact_count', 0)} artifact(s)"
     return ""
