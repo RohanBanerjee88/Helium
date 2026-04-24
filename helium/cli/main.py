@@ -27,7 +27,7 @@ from helium import __version__
 from helium.benchmarks.cli import app as _benchmark_app
 from helium.config import settings
 from helium.models.job import Job, JobStatus, StageStatus
-from helium.pipeline.stages import convert, diarize, evaluate, export, separate, validate
+from helium.pipeline.stages import convert, diarize, evaluate, export, extract, separate, validate
 from helium.storage.local import storage
 
 app = typer.Typer(
@@ -47,6 +47,7 @@ _ARTIFACT_FIELD_BY_STAGE = {
     "validate": "validation_report",
     "diarize": "diarization_output",
     "separate": "separation_output",
+    "extract": "extraction_output",
     "convert": "conversion_output",
     "evaluate": "evaluation_report",
     "export": "export_manifest",
@@ -239,6 +240,7 @@ def run(
         ("validate", validate.run, audio_dir, artifacts_dir, job.audio_files),
         ("diarize", diarize.run, audio_dir, artifacts_dir, job.audio_files, job.target_speakers),
         ("separate", separate.run, audio_dir, artifacts_dir, job.audio_files, job.target_speakers),
+        ("extract", extract.run, audio_dir, artifacts_dir, job.audio_files, job.target_speakers),
         ("convert", convert.run, audio_dir, artifacts_dir, job.audio_files, job.target_speakers),
         ("evaluate", evaluate.run, artifacts_dir, job.audio_files, job.target_speakers),
         ("export", export.run, artifacts_dir, job.id),

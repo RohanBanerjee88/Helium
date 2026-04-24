@@ -266,6 +266,60 @@ def _metrics_from_rttm_files(diar_dir: Path, rttm_files: List[Path]) -> Dict[str
     return {"status": "computed", "values": values}
 
 
+def _extraction_metrics(artifacts_dir: Path) -> Dict[str, Any]:
+    """Report per-speaker clean audio extracted via exclusive diarization turns."""
+    ext_dir = artifacts_dir / "extraction"
+    unavail: Dict[str, Any] = {"status": "unavailable", "reason": "", "values": {}}
+
+    if not ext_dir.exists():
+        return {**unavail, "reason": "extraction stage has not run"}
+
+    manifest = _load_json(ext_dir / "manifest.json")
+    if not manifest:
+        return {**unavail, "reason": "extraction/manifest.json not found"}
+
+    completed = [f for f in manifest.get("files", []) if f.get("status") == "completed"]
+    if not completed:
+        skipped = [f for f in manifest.get("files", []) if f.get("status") == "skipped"]
+        reason = skipped[0].get("reason", "no files completed") if skipped else "no files completed"
+        return {**unavail, "reason": reason}
+
+    total_speakers: set = set()
+    per_file: List[Dict] = []
+    for file_meta in completed:
+        speakers = file_meta.get("speakers", {})
+        total_speakers.update(speakers.keys())
+        per_file.append({
+            "file": file_meta["file"],
+            "speakers": {
+                spk: info.get("duration_s", 0.0)
+                for spk, info in speakers.items()
+            },
+        })
+
+    all_durations = [
+        info["duration_s"]
+        for f in completed
+        for info in f.get("speakers", {}).values()
+    ]
+
+    values: Dict[str, Any] = {
+        "files_extracted": len(completed),
+        "speaker_count": len(total_speakers),
+        "speakers": sorted(total_speakers),
+        "total_exclusive_duration_s": round(sum(all_durations), 2),
+        "mean_duration_per_speaker_s": (
+            round(sum(all_durations) / len(all_durations), 2) if all_durations else 0.0
+        ),
+        "per_file": per_file,
+        "note": (
+            "Exclusive-turn extraction gives near-reference quality audio "
+            "with no model — use these files as VC reference input."
+        ),
+    }
+    return {"status": "computed", "values": values}
+
+
 def _speaker_sim_metrics(artifacts_dir: Path) -> Dict[str, Any]:
     """Report speaker-similarity availability from conversion outputs."""
     conv_dir = artifacts_dir / "conversion"
@@ -312,6 +366,7 @@ def run(artifacts_dir: Path, audio_files: List[str], target_speakers: int) -> Di
 
     sep = _separation_metrics(artifacts_dir)
     diar = _diarization_metrics(artifacts_dir)
+    ext = _extraction_metrics(artifacts_dir)
     spk_sim = _speaker_sim_metrics(artifacts_dir)
 
     content_pres = {
@@ -334,6 +389,7 @@ def run(artifacts_dir: Path, audio_files: List[str], target_speakers: int) -> Di
         },
         "separation": sep,
         "diarization": diar,
+        "extraction": ext,
         "speaker_similarity": spk_sim,
         "content_preservation": content_pres,
         "research_question": (
@@ -351,6 +407,7 @@ def run(artifacts_dir: Path, audio_files: List[str], target_speakers: int) -> Di
         k for k, v in {
             "separation": sep,
             "diarization": diar,
+            "extraction": ext,
             "speaker_similarity": spk_sim,
         }.items()
         if v.get("status") == "computed"
@@ -359,6 +416,7 @@ def run(artifacts_dir: Path, audio_files: List[str], target_speakers: int) -> Di
         k for k, v in {
             "separation": sep,
             "diarization": diar,
+            "extraction": ext,
             "speaker_similarity": spk_sim,
             "content_preservation": content_pres,
         }.items()
@@ -376,6 +434,7 @@ def run(artifacts_dir: Path, audio_files: List[str], target_speakers: int) -> Di
         "metrics_unavailable": unavailable_groups,
         "separation_values": sep.get("values", {}),
         "diarization_values": diar.get("values", {}),
+        "extraction_values": ext.get("values", {}),
     }
 
     summary_path = evaluation_dir / "experiment_summary.json"

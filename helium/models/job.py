@@ -33,12 +33,13 @@ class JobArtifacts(BaseModel):
     validation_report: Optional[str] = None
     diarization_output: Optional[str] = None
     separation_output: Optional[str] = None
+    extraction_output: Optional[str] = None
     conversion_output: Optional[str] = None
     evaluation_report: Optional[str] = None
     export_manifest: Optional[str] = None
 
 
-PIPELINE_STAGES = ["validate", "diarize", "separate", "convert", "evaluate", "export"]
+PIPELINE_STAGES = ["validate", "diarize", "separate", "extract", "convert", "evaluate", "export"]
 
 
 class Job(BaseModel):
