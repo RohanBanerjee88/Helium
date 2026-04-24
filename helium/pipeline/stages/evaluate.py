@@ -58,7 +58,13 @@ def _load_json(path: Path) -> Optional[Dict]:
 # ── per-module metric helpers ─────────────────────────────────────────────────
 
 def _separation_metrics(artifacts_dir: Path) -> Dict[str, Any]:
-    """Compute separation metrics from artifacts/separation/ if available."""
+    """Compute separation metrics from artifacts/separation/ if available.
+
+    Reads separation/manifest.json (written by the real separate stage) when
+    present.  Prefers assigned speaker files (<stem>_speaker_*.wav) over raw
+    streams (<stem>_raw_*.wav) so that diarization-guided assignment is
+    reflected in the metrics.
+    """
     sep_dir = artifacts_dir / "separation"
     unavail: Dict[str, Any] = {"status": "unavailable", "reason": "", "values": {}}
 
@@ -67,15 +73,31 @@ def _separation_metrics(artifacts_dir: Path) -> Dict[str, Any]:
 
     plan = _load_json(sep_dir / "separation_plan.json")
     if plan and plan.get("status") == "placeholder":
-        return {**unavail, "reason": "separation stage ran in placeholder mode — no audio outputs yet"}
+        return {
+            **unavail,
+            "reason": (
+                "separation stage ran in placeholder mode — "
+                f"{plan.get('reason', 'prerequisites not met')}"
+            ),
+        }
 
-    spk_files = sorted(sep_dir.glob("speaker_*.wav"))
+    # Read manifest for extra context (sample_rate, diarization_guided, etc.)
+    manifest = _load_json(sep_dir / "manifest.json")
+
+    # Find the two separated speaker streams.
+    # Priority: assigned files (*_speaker_N.wav) → raw streams (*_raw_N.wav)
+    spk_files = sorted(
+        f for f in sep_dir.glob("*speaker_*.wav") if "_raw_" not in f.name
+    )
+    if len(spk_files) < 2:
+        spk_files = sorted(sep_dir.glob("*_raw_*.wav"))
     if len(spk_files) < 2:
         return {
             **unavail,
             "reason": (
-                f"expected ≥2 speaker_*.wav files in {sep_dir.relative_to(artifacts_dir)}, "
-                f"found {len(spk_files)}"
+                f"expected ≥2 speaker WAVs in {sep_dir.relative_to(artifacts_dir)}, "
+                f"found {len(spk_files)}.  "
+                "Check that the separation stage completed without errors."
             ),
         }
 
@@ -89,9 +111,15 @@ def _separation_metrics(artifacts_dir: Path) -> Dict[str, Any]:
 
     values: Dict[str, Any] = {
         "blind_source_coherence": round(blind_coherence(src_a, src_b), 4),
+        "diarization_guided": (
+            manifest.get("files", [{}])[0].get("diarization_guided", False)
+            if manifest else False
+        ),
+        "files_evaluated": [f.name for f in spk_files[:2]],
     }
 
-    # If reference sources and mixture are present, compute SI-SDR and SI-SDRi
+    # Reference-based metrics: available in benchmark runs where ground-truth
+    # sources are placed as ref_speaker_*.wav alongside the mixture.
     ref_files = sorted(sep_dir.glob("ref_speaker_*.wav"))
     mix_file = sep_dir / "mixture.wav"
 
@@ -108,18 +136,16 @@ def _separation_metrics(artifacts_dir: Path) -> Dict[str, Any]:
 
             pi_si_sdr, best_perm = pit_si_sdr([ra, rb], [sa, sb])
             values["si_sdr_db"] = round(pi_si_sdr, 2)
-
-            ests_ordered = [sa, sb]
-            si_sdri_vals = [
-                si_sdri([ra, rb][i], ests_ordered[best_perm[i]], m) for i in range(2)
-            ]
-            values["si_sdri_db"] = round(sum(si_sdri_vals) / 2, 2)
+            values["si_sdri_db"] = round(
+                sum(si_sdri([ra, rb][i], [sa, sb][best_perm[i]], m) for i in range(2)) / 2,
+                2,
+            )
         except Exception as exc:
             values["reference_metric_error"] = str(exc)
     else:
         values["note"] = (
-            "SI-SDR and SI-SDRi require reference sources (ref_speaker_*.wav) "
-            "and mixture.wav in the separation directory — available in benchmark runs."
+            "SI-SDR / SI-SDRi require ref_speaker_*.wav + mixture.wav "
+            "in separation/ — these are written automatically by the benchmark runner."
         )
 
     return {"status": "computed", "values": values}

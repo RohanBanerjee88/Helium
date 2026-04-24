@@ -21,7 +21,9 @@ dependencies = [
 [project.optional-dependencies]
 research = [
     "torch>=2.5.0",
+    "torchaudio>=2.5.0",
     "pyannote.audio>=3.3.0",   # speaker diarization (requires HELIUM_HF_TOKEN + model acceptance)
+    "speechbrain>=1.0.0",      # SepFormer speech source separation
 ]
 # Optional backends that activate specific metric functions
 metrics = [
