@@ -58,7 +58,13 @@ def _load_json(path: Path) -> Optional[Dict]:
 # ── per-module metric helpers ─────────────────────────────────────────────────
 
 def _separation_metrics(artifacts_dir: Path) -> Dict[str, Any]:
-    """Compute separation metrics from artifacts/separation/ if available."""
+    """Compute separation metrics from artifacts/separation/ if available.
+
+    Reads separation/manifest.json (written by the real separate stage) when
+    present.  Prefers assigned speaker files (<stem>_speaker_*.wav) over raw
+    streams (<stem>_raw_*.wav) so that diarization-guided assignment is
+    reflected in the metrics.
+    """
     sep_dir = artifacts_dir / "separation"
     unavail: Dict[str, Any] = {"status": "unavailable", "reason": "", "values": {}}
 
@@ -67,15 +73,31 @@ def _separation_metrics(artifacts_dir: Path) -> Dict[str, Any]:
 
     plan = _load_json(sep_dir / "separation_plan.json")
     if plan and plan.get("status") == "placeholder":
-        return {**unavail, "reason": "separation stage ran in placeholder mode — no audio outputs yet"}
+        return {
+            **unavail,
+            "reason": (
+                "separation stage ran in placeholder mode — "
+                f"{plan.get('reason', 'prerequisites not met')}"
+            ),
+        }
 
-    spk_files = sorted(sep_dir.glob("speaker_*.wav"))
+    # Read manifest for extra context (sample_rate, diarization_guided, etc.)
+    manifest = _load_json(sep_dir / "manifest.json")
+
+    # Find the two separated speaker streams.
+    # Priority: assigned files (*_speaker_N.wav) → raw streams (*_raw_N.wav)
+    spk_files = sorted(
+        f for f in sep_dir.glob("*speaker_*.wav") if "_raw_" not in f.name
+    )
+    if len(spk_files) < 2:
+        spk_files = sorted(sep_dir.glob("*_raw_*.wav"))
     if len(spk_files) < 2:
         return {
             **unavail,
             "reason": (
-                f"expected ≥2 speaker_*.wav files in {sep_dir.relative_to(artifacts_dir)}, "
-                f"found {len(spk_files)}"
+                f"expected ≥2 speaker WAVs in {sep_dir.relative_to(artifacts_dir)}, "
+                f"found {len(spk_files)}.  "
+                "Check that the separation stage completed without errors."
             ),
         }
 
@@ -89,9 +111,15 @@ def _separation_metrics(artifacts_dir: Path) -> Dict[str, Any]:
 
     values: Dict[str, Any] = {
         "blind_source_coherence": round(blind_coherence(src_a, src_b), 4),
+        "diarization_guided": (
+            manifest.get("files", [{}])[0].get("diarization_guided", False)
+            if manifest else False
+        ),
+        "files_evaluated": [f.name for f in spk_files[:2]],
     }
 
-    # If reference sources and mixture are present, compute SI-SDR and SI-SDRi
+    # Reference-based metrics: available in benchmark runs where ground-truth
+    # sources are placed as ref_speaker_*.wav alongside the mixture.
     ref_files = sorted(sep_dir.glob("ref_speaker_*.wav"))
     mix_file = sep_dir / "mixture.wav"
 
@@ -108,18 +136,16 @@ def _separation_metrics(artifacts_dir: Path) -> Dict[str, Any]:
 
             pi_si_sdr, best_perm = pit_si_sdr([ra, rb], [sa, sb])
             values["si_sdr_db"] = round(pi_si_sdr, 2)
-
-            ests_ordered = [sa, sb]
-            si_sdri_vals = [
-                si_sdri([ra, rb][i], ests_ordered[best_perm[i]], m) for i in range(2)
-            ]
-            values["si_sdri_db"] = round(sum(si_sdri_vals) / 2, 2)
+            values["si_sdri_db"] = round(
+                sum(si_sdri([ra, rb][i], [sa, sb][best_perm[i]], m) for i in range(2)) / 2,
+                2,
+            )
         except Exception as exc:
             values["reference_metric_error"] = str(exc)
     else:
         values["note"] = (
-            "SI-SDR and SI-SDRi require reference sources (ref_speaker_*.wav) "
-            "and mixture.wav in the separation directory — available in benchmark runs."
+            "SI-SDR / SI-SDRi require ref_speaker_*.wav + mixture.wav "
+            "in separation/ — these are written automatically by the benchmark runner."
         )
 
     return {"status": "computed", "values": values}
@@ -240,6 +266,60 @@ def _metrics_from_rttm_files(diar_dir: Path, rttm_files: List[Path]) -> Dict[str
     return {"status": "computed", "values": values}
 
 
+def _extraction_metrics(artifacts_dir: Path) -> Dict[str, Any]:
+    """Report per-speaker clean audio extracted via exclusive diarization turns."""
+    ext_dir = artifacts_dir / "extraction"
+    unavail: Dict[str, Any] = {"status": "unavailable", "reason": "", "values": {}}
+
+    if not ext_dir.exists():
+        return {**unavail, "reason": "extraction stage has not run"}
+
+    manifest = _load_json(ext_dir / "manifest.json")
+    if not manifest:
+        return {**unavail, "reason": "extraction/manifest.json not found"}
+
+    completed = [f for f in manifest.get("files", []) if f.get("status") == "completed"]
+    if not completed:
+        skipped = [f for f in manifest.get("files", []) if f.get("status") == "skipped"]
+        reason = skipped[0].get("reason", "no files completed") if skipped else "no files completed"
+        return {**unavail, "reason": reason}
+
+    total_speakers: set = set()
+    per_file: List[Dict] = []
+    for file_meta in completed:
+        speakers = file_meta.get("speakers", {})
+        total_speakers.update(speakers.keys())
+        per_file.append({
+            "file": file_meta["file"],
+            "speakers": {
+                spk: info.get("duration_s", 0.0)
+                for spk, info in speakers.items()
+            },
+        })
+
+    all_durations = [
+        info["duration_s"]
+        for f in completed
+        for info in f.get("speakers", {}).values()
+    ]
+
+    values: Dict[str, Any] = {
+        "files_extracted": len(completed),
+        "speaker_count": len(total_speakers),
+        "speakers": sorted(total_speakers),
+        "total_exclusive_duration_s": round(sum(all_durations), 2),
+        "mean_duration_per_speaker_s": (
+            round(sum(all_durations) / len(all_durations), 2) if all_durations else 0.0
+        ),
+        "per_file": per_file,
+        "note": (
+            "Exclusive-turn extraction gives near-reference quality audio "
+            "with no model — use these files as VC reference input."
+        ),
+    }
+    return {"status": "computed", "values": values}
+
+
 def _speaker_sim_metrics(artifacts_dir: Path) -> Dict[str, Any]:
     """Report speaker-similarity availability from conversion outputs."""
     conv_dir = artifacts_dir / "conversion"
@@ -286,6 +366,7 @@ def run(artifacts_dir: Path, audio_files: List[str], target_speakers: int) -> Di
 
     sep = _separation_metrics(artifacts_dir)
     diar = _diarization_metrics(artifacts_dir)
+    ext = _extraction_metrics(artifacts_dir)
     spk_sim = _speaker_sim_metrics(artifacts_dir)
 
     content_pres = {
@@ -308,6 +389,7 @@ def run(artifacts_dir: Path, audio_files: List[str], target_speakers: int) -> Di
         },
         "separation": sep,
         "diarization": diar,
+        "extraction": ext,
         "speaker_similarity": spk_sim,
         "content_preservation": content_pres,
         "research_question": (
@@ -325,6 +407,7 @@ def run(artifacts_dir: Path, audio_files: List[str], target_speakers: int) -> Di
         k for k, v in {
             "separation": sep,
             "diarization": diar,
+            "extraction": ext,
             "speaker_similarity": spk_sim,
         }.items()
         if v.get("status") == "computed"
@@ -333,6 +416,7 @@ def run(artifacts_dir: Path, audio_files: List[str], target_speakers: int) -> Di
         k for k, v in {
             "separation": sep,
             "diarization": diar,
+            "extraction": ext,
             "speaker_similarity": spk_sim,
             "content_preservation": content_pres,
         }.items()
@@ -350,6 +434,7 @@ def run(artifacts_dir: Path, audio_files: List[str], target_speakers: int) -> Di
         "metrics_unavailable": unavailable_groups,
         "separation_values": sep.get("values", {}),
         "diarization_values": diar.get("values", {}),
+        "extraction_values": ext.get("values", {}),
     }
 
     summary_path = evaluation_dir / "experiment_summary.json"
