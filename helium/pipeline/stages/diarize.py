@@ -133,7 +133,16 @@ def _diarize_file(
     if target_speakers > 0:
         run_kwargs["num_speakers"] = target_speakers
 
-    diarization = pipeline(str(audio_path), **run_kwargs)
+    output = pipeline(str(audio_path), **run_kwargs)
+
+    # pyannote.audio 4.x returns a DiarizeOutput dataclass;
+    # older versions returned an Annotation directly.
+    if hasattr(output, "speaker_diarization"):
+        diarization = output.speaker_diarization
+        exclusive_annotation = output.exclusive_speaker_diarization
+    else:
+        diarization = output
+        exclusive_annotation = None
 
     # --- Collect all turns ---
     turns = [
@@ -172,7 +181,7 @@ def _diarize_file(
     ]
 
     # --- Exclusive turns (non-overlapping segments) ---
-    exclusive = _exclusive_turns(diarization, turns)
+    exclusive = _exclusive_turns(diarization, turns, exclusive_annotation)
     if exclusive is not None:
         excl_path = diar_dir / f"{stem}_exclusive.json"
         with open(excl_path, "w") as fh:
@@ -200,33 +209,38 @@ def _diarize_file(
     }
 
 
-def _exclusive_turns(diarization, turns: List[Dict]) -> Optional[List[Dict]]:
-    """Return turns with no speaker overlap, or None if not computable.
+def _exclusive_turns(
+    diarization, turns: List[Dict], exclusive_annotation=None
+) -> Optional[List[Dict]]:
+    """Return turns with no speaker overlap, or None if not computable."""
+    # pyannote 4.x provides exclusive_speaker_diarization directly
+    if exclusive_annotation is not None:
+        try:
+            return [
+                {
+                    "start": round(turn.start, 3),
+                    "end": round(turn.end, 3),
+                    "duration": round(turn.duration, 3),
+                    "speaker": speaker,
+                }
+                for turn, _, speaker in exclusive_annotation.itertracks(yield_label=True)
+            ]
+        except Exception:
+            pass
 
-    Uses pyannote's get_overlap() to find regions where more than one
-    speaker is simultaneously active, then filters them out.
-    Failure modes are caught silently so this never blocks the stage.
-    """
+    # Fallback for older pyannote versions: compute via get_overlap()
     try:
         overlap_timeline = diarization.get_overlap()
     except AttributeError:
-        # Older pyannote versions don't expose get_overlap
         return None
 
     if not overlap_timeline:
-        # No overlapping speech — all turns are exclusive
         return turns
 
-    # Build a sorted list of overlapping intervals for fast lookup
-    overlap_intervals = [
-        (seg.start, seg.end) for seg in overlap_timeline
-    ]
+    overlap_intervals = [(seg.start, seg.end) for seg in overlap_timeline]
 
     def _has_overlap(start: float, end: float) -> bool:
-        for ov_start, ov_end in overlap_intervals:
-            if ov_start < end and ov_end > start:
-                return True
-        return False
+        return any(ov_s < end and ov_e > start for ov_s, ov_e in overlap_intervals)
 
     return [t for t in turns if not _has_overlap(t["start"], t["end"])]
 
