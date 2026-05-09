@@ -41,3 +41,8 @@ infra/*_override.tf
 infra/*_override.tf.json
 infra/.terraformrc
 infra/terraform.rc
+
+sample_*
+
+.claude/*
+.claude
